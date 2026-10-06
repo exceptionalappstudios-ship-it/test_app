@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Appointments – Meet Gurudev</title>
+  <meta name="theme-color" content="#d9731a">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header class="top"><div class="inner">
+    <a class="brand" href="/">🪔 Meet Gurudev</a>
+    <nav>
+      <a href="/">Book</a>
+      <a href="/my.html" data-nav="my" class="active">My appointments</a>
+    </nav>
+  </div></header>
+
+  <main>
+    <h1>My appointments</h1>
+    <p class="lead">Track your requests and receive updates about your meeting.</p>
+
+    <div id="noVisitor" class="card hidden">
+      <p class="empty">You haven't booked an appointment from this device yet.</p>
+      <div class="actions" style="justify-content:center"><a class="btn" href="/">Book an appointment</a></div>
+    </div>
+
+    <div id="content" class="hidden">
+      <section class="card" id="pushCard">
+        <h2>🔔 Notifications</h2>
+        <p class="muted" id="pushStatus">Get notified on this device when your appointment is approved and before your meeting.</p>
+        <button class="btn small" id="enablePush">Turn on notifications</button>
+        <div id="pushMsg" class="hidden"></div>
+      </section>
+
+      <section class="card">
+        <h2>Appointments</h2>
+        <div id="appointments"></div>
+      </section>
+
+      <section class="card">
+        <div class="list-item head" style="padding:0;margin-bottom:12px">
+          <h2 style="margin:0">Updates <span id="unreadCount"></span></h2>
+          <button class="btn secondary small" id="markRead">Mark all as read</button>
+        </div>
+        <div id="notifications"></div>
+      </section>
+    </div>
+  </main>
+
+  <script type="module" src="/js/my.js"></script>
+</body>
+</html>

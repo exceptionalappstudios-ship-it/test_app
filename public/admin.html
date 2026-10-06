@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin – Meet Gurudev</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header class="top"><div class="inner">
+    <a class="brand" href="/admin.html">🪔 Appointments Admin</a>
+    <nav><a href="#" id="logout" class="hidden">Log out</a></nav>
+  </div></header>
+
+  <main>
+    <section id="loginView" class="card hidden" style="max-width:400px;margin:40px auto">
+      <h2>Admin login</h2>
+      <form id="loginForm">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+        <div id="loginError" class="error hidden"></div>
+        <div class="actions"><button class="btn" type="submit">Log in</button></div>
+      </form>
+    </section>
+
+    <div id="dashboard" class="hidden">
+      <div class="tabs" id="mainTabs">
+        <button data-tab="requests" class="on">Requests</button>
+        <button data-tab="slots">Manage slots</button>
+      </div>
+
+      <section id="requestsTab">
+        <div class="tabs" id="statusTabs">
+          <button data-status="pending" class="on">Pending</button>
+          <button data-status="approved">Approved</button>
+          <button data-status="rejected">Rejected</button>
+          <button data-status="cancelled">Cancelled</button>
+          <button data-status="">All</button>
+        </div>
+        <div class="card"><div id="requests"></div></div>
+      </section>
+
+      <section id="slotsTab" class="hidden">
+        <div class="card">
+          <h2>Add slots</h2>
+          <form id="slotForm">
+            <div class="row">
+              <div><label for="fromDate">From date</label><input id="fromDate" name="fromDate" type="date" required></div>
+              <div><label for="toDate">To date</label><input id="toDate" name="toDate" type="date" required></div>
+            </div>
+            <div class="row">
+              <div><label for="startTime">Daily start time</label><input id="startTime" name="startTime" type="time" value="10:00" required></div>
+              <div><label for="endTime">Daily end time</label><input id="endTime" name="endTime" type="time" value="12:00" required></div>
+            </div>
+            <div class="row">
+              <div><label for="duration">Meeting length (minutes)</label><input id="duration" name="duration" type="number" min="5" max="480" value="15" required></div>
+              <div><label for="gap">Break between meetings (minutes)</label><input id="gap" name="gap" type="number" min="0" max="240" value="5" required></div>
+            </div>
+            <label>Days of the week</label>
+            <div class="weekdays" id="weekdays"></div>
+            <div id="slotMsg" class="hidden"></div>
+            <div class="actions"><button class="btn" type="submit">Create slots</button></div>
+          </form>
+        </div>
+        <div class="card">
+          <h2>Upcoming slots</h2>
+          <div id="slotList"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script type="module" src="/js/admin.js"></script>
+</body>
+</html>
