@@ -2,79 +2,28 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Meet Gurudev – Book an Appointment</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Meet Gurudev</title>
+  <meta name="description" content="Book an appointment to meet Gurudev">
   <meta name="theme-color" content="#d9731a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
   <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
-  <header class="top"><div class="inner">
-    <a class="brand" href="/">🪔 Meet Gurudev</a>
-    <nav>
-      <a href="/" class="active">Book</a>
-      <a href="/my.html" data-nav="my">My appointments</a>
-    </nav>
+  <header class="topbar"><div class="inner">
+    <a class="brand" href="#/book"><img src="/icon.svg" alt="">Meet Gurudev</a>
+    <a class="icon-btn hidden" href="#/profile" id="profileLink" aria-label="Profile"></a>
   </div></header>
-
-  <main>
-    <h1>Book an appointment</h1>
-    <p class="lead">Choose a time that suits you and tell us a little about your visit. Your request will be reviewed and you'll be notified here once it's confirmed.</p>
-
-    <div class="steps">
-      <span id="step1" class="on">1. Choose a slot</span> ›
-      <span id="step2">2. Your details</span> ›
-      <span id="step3">3. Request sent</span>
-    </div>
-
-    <section id="slotsView" class="card">
-      <h2>Available slots</h2>
-      <p class="muted" id="tzNote"></p>
-      <div id="slots"><p class="empty">Loading available slots…</p></div>
-      <div class="actions">
-        <button class="btn" id="toDetails" disabled>Continue</button>
-      </div>
-    </section>
-
-    <section id="detailsView" class="card hidden">
-      <h2>Your details</h2>
-      <p>Selected slot: <strong id="selectedSlot"></strong> <button class="btn secondary small" id="changeSlot" type="button">Change</button></p>
-      <form id="bookingForm" novalidate>
-        <div class="row">
-          <div>
-            <label for="name">Full name</label>
-            <input id="name" name="name" autocomplete="name" required maxlength="100">
-          </div>
-          <div>
-            <label for="phone">Phone number</label>
-            <input id="phone" name="phone" type="tel" autocomplete="tel" required maxlength="20" placeholder="+91 98765 43210">
-          </div>
-        </div>
-        <label for="email">Email</label>
-        <input id="email" name="email" type="email" autocomplete="email" required maxlength="200">
-        <label for="purpose">Purpose of meeting</label>
-        <textarea id="purpose" name="purpose" required maxlength="2000" placeholder="Briefly share why you'd like to meet Gurudev"></textarea>
-        <div id="formError" class="error hidden"></div>
-        <div class="actions">
-          <button class="btn" type="submit" id="submitBtn">Request appointment</button>
-        </div>
-      </form>
-    </section>
-
-    <section id="doneView" class="card hidden">
-      <h2>🙏 Request sent</h2>
-      <p>Your request for <strong id="doneSlot"></strong> is <span class="status pending">pending</span> approval.</p>
-      <p>We'll notify you in the app as soon as it's reviewed. Turn on notifications so you don't miss it — you'll also get reminders before your meeting.</p>
-      <div class="actions">
-        <button class="btn" id="enablePush">🔔 Turn on notifications</button>
-        <a class="btn secondary" href="/my.html">View my appointments</a>
-      </div>
-      <div id="pushMsg" class="hidden"></div>
-    </section>
-  </main>
-
-  <script type="module" src="/js/book.js"></script>
+  <nav class="tabbar hidden" id="tabbar" aria-label="Main"><div class="inner">
+    <a href="#/book" data-tab="book"></a>
+    <a href="#/appointments" data-tab="appointments"></a>
+    <a href="#/updates" data-tab="updates"></a>
+    <a href="#/contact" data-tab="contact"></a>
+  </div></nav>
+  <main id="app"></main>
+  <script type="module" src="/js/visitor.js"></script>
 </body>
 </html>

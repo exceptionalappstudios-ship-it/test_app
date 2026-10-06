@@ -8,12 +8,15 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning src/index.js",
-    "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js",
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env --watch src/index.js",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
   },
   "dependencies": {
     "express": "^5.2.1",
+    "jsqr": "^1.4.0",
+    "nodemailer": "^10.0.15",
+    "qrcode": "^1.5.4",
     "web-push": "^3.6.7"
   }
 }

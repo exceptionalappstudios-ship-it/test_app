@@ -1,25 +1,27 @@
-# Meet Gurudev – Appointment Booking
+# Meet Gurudev – Appointments
 
-A small web app (installable on phones as an app) where visitors book time to meet Gurudev:
+A mobile-friendly web app (installable on phones) for booking meetings with Gurudev.
 
-1. **See available slots** – visitors browse open time slots grouped by day.
-2. **Answer a few questions** – name, phone number, email and purpose of the meeting.
-3. **Approval** – the request is held as *pending* (no one else can take that slot) until an admin approves or declines it.
-4. **Notifications** – visitors get in-app notifications for every update, plus optional push notifications on their phone/computer:
-   - request received
-   - appointment confirmed (with an optional note, e.g. "please bring a photo ID") / declined / cancelled
-   - reminder the day before and 1 hour before the meeting
+**Visitors** (`/`)
+1. Create an account (name, mobile/WhatsApp, email, password).
+2. Pick a date and time from the open slots and share the purpose of the meeting.
+3. The request is held as *pending* until the ashram team approves it.
+4. Get updates **in the app, by WhatsApp and by email**: request received, confirmed / declined / cancelled,
+   reminders the day before and an hour before.
+5. **10 minutes before the meeting, an entry QR code appears** in the app (with a notification).
+   Show it at the entrance.
+6. **Contact the team**: message thread in the app, plus call / WhatsApp / email buttons.
 
-## Pages
-
-| Page | Who | What |
-| --- | --- | --- |
-| `/` | Visitors | Pick a slot → fill in details → request sent |
-| `/my.html` | Visitors | Their appointments, status, notifications feed, turn on push, cancel |
-| `/admin.html` | Ashram team | Approve / decline requests, cancel appointments, create / block / delete slots |
-
-Visitors don't need to create an account: when they book, their browser receives a private
-token, which is how "My appointments" and notifications find them on that device.
+**Admins** (`/admin.html`)
+- **Live dashboard**: today's booked / checked-in / yet-to-arrive counts, and a date-wise chart and table of
+  bookings vs check-ins. Updates instantly as people book, get approved and check in.
+- **Scan**: uses the phone camera to read a visitor's QR code, shows who they are, and admits them with one tap.
+  It warns about wrong-day, early or late passes (you can still admit anyway), and refuses cancelled or already-used passes.
+  A code can also be typed in by hand.
+- **Requests**: approve (with an optional note) or decline; cancel approved appointments.
+- **Messages**: reply to visitors' questions.
+- **Manage**: create slots in bulk (date range, days of week, meeting length, breaks), block or delete slots,
+  add or remove admins, change password.
 
 ## Running it
 
@@ -27,47 +29,72 @@ Requires Node.js 22.13 or newer.
 
 ```bash
 npm install
-ADMIN_PASSWORD='choose-a-strong-password' npm start
+cp .env.example .env      # then edit .env
+npm start
 ```
 
-Open http://localhost:3000 for visitors and http://localhost:3000/admin.html for the admin
-dashboard. Start by going to **Manage slots** and creating slots (e.g. Mon–Sat, 10:00–12:00,
-15-minute meetings with a 5-minute break).
+Open http://localhost:3000 for visitors and http://localhost:3000/admin.html for admins. The first admin
+account is created from `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env`; that admin can add more admins in **Manage**.
 
-### Configuration
+Without email/WhatsApp settings the app still works: messages that would have been sent are printed in the
+terminal instead.
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `ADMIN_PASSWORD` | random, printed at startup | Password for the admin dashboard |
-| `APP_TIMEZONE` | `Asia/Kolkata` | Timezone all slot times are in |
-| `PORT` | `3000` | HTTP port |
-| `DATABASE_FILE` | `data/appointments.db` | SQLite database file |
-| `VAPID_SUBJECT` | `mailto:admin@example.com` | Contact for push services – set to your email (`mailto:you@domain`) |
+## Email
 
-Push notification keys are generated automatically on first start and stored in the database.
+Fill in the `SMTP_*` settings from any email provider (Gmail with an app password, Zoho, SendGrid, Amazon SES…).
+Emails are sent for every update and for "forgot password" links.
 
-### Push notifications
+## WhatsApp
 
-Browsers only allow push over **HTTPS** (or `localhost`), so deploy behind HTTPS. On iPhone,
-push works once the visitor adds the site to their home screen (Share → *Add to Home Screen*,
-iOS 16.4+). Without push, visitors still see every update in the app, live, while it's open.
+Uses the official **Meta WhatsApp Cloud API**:
+
+1. In [Meta for Developers](https://developers.facebook.com/), create an app with the WhatsApp product and add
+   your business phone number. Copy the **Phone number ID** and create a **permanent access token**.
+2. WhatsApp only allows businesses to message people first using an **approved template**. In WhatsApp Manager,
+   create a *Utility* template named `appointment_update` (language English) with this body:
+
+   ```
+   {{1}}
+   {{2}}
+   ```
+
+   `{{1}}` is the title (e.g. "Appointment confirmed 🙏") and `{{2}}` the message.
+3. Set `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` (and `WHATSAPP_TEMPLATE` if you named it differently).
+
+Phone numbers are stored in international format; numbers typed without a country code get `DEFAULT_COUNTRY_CODE` (91).
+
+## Going live
+
+- Serve it over **HTTPS** and set `APP_URL` to the https address. The camera scanner and phone notifications
+  only work over HTTPS (or on `localhost`).
+- On iPhone, visitors get phone notifications after adding the app to the Home Screen (Share → *Add to Home Screen*).
+  WhatsApp and email work everywhere.
+- Data is stored in a single SQLite file (`data/appointments.db`). Back it up regularly.
+
+## Settings
+
+All settings live in `.env`. See `.env.example` for the full list with explanations.
 
 ## Development
 
 ```bash
 npm run dev   # restart on file changes
-npm test      # API tests (booking, approval, notifications, reminders)
+npm test      # API tests: accounts, booking, approvals, WhatsApp/email, reminders, QR pass, check-in, dashboard, messages
 ```
-
-### Project layout
 
 ```
 src/
-  index.js    server entrypoint + reminder job (runs every minute)
-  app.js      HTTP API: slots, bookings, visitor area, admin
-  notify.js   in-app notifications, live updates (SSE) and Web Push
-  db.js       SQLite schema (built-in node:sqlite)
-  time.js     timezone helpers
-public/       visitor + admin pages, service worker, PWA manifest
-test/         API tests (node:test)
+  index.js          entrypoint: reads settings, creates the first admin, runs the reminder job each minute
+  app.js            Express app wiring
+  routes/auth.js    sign up, log in, password reset
+  routes/visitor.js slots, booking, entry pass (QR), notifications, messages
+  routes/admin.js   dashboard stats, requests, check-in, slots, messages, admins
+  notify.js         in-app + live (SSE) + Web Push + email + WhatsApp fan-out
+  channels.js       SMTP email and WhatsApp Cloud API senders
+  jobs.js           reminders and "entry pass ready" notifications
+  db.js             SQLite schema (built-in node:sqlite)
+public/
+  index.html, js/visitor.js   visitor app
+  admin.html, js/admin.js     admin app (js/chart.js dashboard chart)
+test/               node:test suite
 ```

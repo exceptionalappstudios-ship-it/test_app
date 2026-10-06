@@ -1,4 +1,4 @@
-// Service worker: receives Web Push notifications while the app is closed.
+// Service worker: shows Web Push notifications while the app is closed.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
@@ -9,17 +9,20 @@ self.addEventListener('push', (event) => {
     body: data.body,
     icon: '/icon.svg',
     badge: '/icon.svg',
-    data: { url: data.url || '/my.html' },
+    data: { url: data.url || '/#/appointments' },
   }));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || '/my.html';
+  const url = new URL(event.notification.data?.url || '/#/appointments', self.location.origin).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const existing = windows.find((w) => new URL(w.url).pathname === url);
-    if (existing) return existing.focus();
+    const existing = windows.find((w) => new URL(w.url).pathname === '/');
+    if (existing) {
+      await existing.focus();
+      return existing.navigate(url);
+    }
     return self.clients.openWindow(url);
   })());
 });
