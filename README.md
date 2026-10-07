@@ -75,6 +75,12 @@ Phone numbers are stored in international format; numbers typed without a countr
 
 All settings live in `.env`. See `.env.example` for the full list with explanations.
 
+## Interactive preview
+
+`npm run build:preview` builds `preview/dist/preview.html`: a single page that runs the visitor app and the
+admin app side by side against an in-browser copy of the API (`preview/backend.js`), with sample data and a panel
+showing the WhatsApp and email messages that would be sent. Rebuild it after changing the app.
+
 ## Development
 
 ```bash

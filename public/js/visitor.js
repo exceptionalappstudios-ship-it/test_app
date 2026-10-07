@@ -382,8 +382,8 @@ async function profileView(ctx) {
 
 const afterLogin = async (u) => {
   setLoggedIn(u);
-  const back = sessionStorage.getItem('returnTo');
-  sessionStorage.removeItem('returnTo');
+  let back = null;
+  try { back = sessionStorage.getItem('returnTo'); sessionStorage.removeItem('returnTo'); } catch { /* storage blocked */ }
   location.hash = back || '#/book';
 };
 const auth = (mode) => authView(mode, { title: 'Welcome', subtitle: 'Log in to book your meeting with Gurudev.', onSuccess: afterLogin });
@@ -405,7 +405,10 @@ const router = createRouter({
   ],
   guard: (route, hash) => {
     if (route.public && user && !/reset/.test(hash)) return '#/book';
-    if (!route.public && !user) { sessionStorage.setItem('returnTo', hash); return '#/signup'; }
+    if (!route.public && !user) {
+      try { sessionStorage.setItem('returnTo', hash); } catch { /* storage blocked */ }
+      return '#/signup';
+    }
     return null;
   },
   onChange: (route) => $$('[data-tab]').forEach((a) => a.classList.toggle('on', a.dataset.tab === route.tab)),

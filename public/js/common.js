@@ -178,7 +178,7 @@ export function authView(mode, { title, subtitle, allowSignup = true, onSuccess 
 // ---- Push notifications --------------------------------------------------------
 
 export async function registerServiceWorker() {
-  if (!('serviceWorker' in navigator)) return null;
+  if (window.__DEMO__ || !('serviceWorker' in navigator)) return null;
   try { return await navigator.serviceWorker.register('/sw.js'); } catch { return null; }
 }
 
@@ -187,7 +187,7 @@ function urlBase64ToUint8Array(base64) {
   return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
 }
 
-export const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+export const pushSupported = () => !window.__DEMO__ && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 
 export async function enablePush(vapidPublicKey) {
   if (!pushSupported()) {
