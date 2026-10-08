@@ -55,6 +55,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .msg.fresh { animation: fresh 1.8s ease-out; }
 @keyframes fresh { from { background: var(--green-50); } to { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .msg.fresh { animation: none; } }
+.msg .link { font-size: .74rem; color: var(--ink-2); word-break: break-all; }
+dialog#passView { border: 0; border-radius: 26px; padding: 0; width: min(400px, calc(100vw - 32px)); background: var(--frame); box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+dialog#passView::backdrop { background: rgba(5, 15, 40, .55); }
+dialog#passView iframe { display: block; width: 100%; height: min(720px, calc(100vh - 120px)); border: 0; border-radius: 20px; }
+dialog#passView .bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px 8px 16px; color: #fff; font-size: .85rem; }
 .empty { padding: 26px 16px; color: var(--ink-2); text-align: center; }
 .note { color: var(--ink-2); font-size: .82rem; margin-top: 16px; max-width: 90ch; }
 @media (max-width: 1259px) { .bench { grid-template-columns: repeat(2, minmax(0, 390px)); } }
@@ -74,8 +79,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   <ol class="steps" aria-label="Try it">
     <li>Visitor: log in with any number (the code shows on screen), add your name and a photo, and book.</li>
     <li>Admin: open Requests and tap Approve.</li>
-    <li>Tap “Skip to next message” to receive the reminder, greeting and QR pass.</li>
-    <li>Security: tap the visitor's pass and Allow entry. Tap it again to see the red alert.</li>
+    <li>Tap “Skip to next message” to receive the reminder, greeting and pass link (tap “View pass” in the WhatsApp list).</li>
+    <li>Security: tap the visitor's pass, choose how many came, and Allow entry. Tap it again to see the red alert.</li>
   </ol>
 </div></div>
 
@@ -119,6 +124,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   <p class="note">The camera scanner, phone notifications and real WhatsApp delivery need the app running on a real server, so here you tap a pass to scan it and messages appear above. Morning, Afternoon and Evening passes open at 8 AM, 1 PM and 4 PM by your device's clock; use “Skip to next message” to move the preview clock forward.</p>
 </div>
 
+<dialog id="passView" aria-label="Pass page">
+  <div class="bar"><span>Pass link, as opened on the visitor's phone</span><form method="dialog"><button class="btn light" type="submit">Close</button></form></div>
+  <iframe id="passFrame" title="Pass page"></iframe>
+</dialog>
+
 <script>/*BACKEND*/</script>
 <script>
 /*APPS*/
@@ -155,8 +165,9 @@ function renderLog() {
     const time = new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
     const [title, ...rest] = m.preview.split('\n');
     return `<div class="msg ${seen.size && !seen.has(m.id) ? 'fresh' : ''}">
-      <div class="msg-top"><span class="pill ${m.kind === 'pass' ? 'pass' : ''}">${{ otp: 'Login code', pass: 'QR pass', broadcast: 'Message', update: 'Update' }[m.kind] ?? 'WhatsApp'}</span><span>to ${esc(m.recipient)}</span><span>· ${esc(time)}</span></div>
-      <div class="msg-body"><b>${esc(title)}</b>${esc(rest.join('\n'))}</div></div>`;
+      <div class="msg-top"><span class="pill ${m.kind === 'pass' ? 'pass' : ''}">${{ otp: 'Login code', pass: 'Pass link', update: 'Update' }[m.kind] ?? 'WhatsApp'}</span><span>to ${esc(m.recipient)}</span><span>· ${esc(time)}</span></div>
+      <div class="msg-body"><b>${esc(title)}</b>${esc(rest.join('\n'))}</div>
+      ${m.passToken ? `<button class="btn" type="button" data-pass="${esc(m.passToken)}" style="justify-self:start;margin-top:4px">View pass ↗</button><span class="link">${esc(P.passLink(m.passToken))}</span>` : ''}</div>`;
   }).join('') : '<div class="empty">Nothing sent yet. Log in as the visitor and the login code will appear here.</div>';
   seen = new Set(items.map((m) => m.id));
   if (!seen.size) seen.add(-1);
@@ -166,6 +177,15 @@ function renderLog() {
   badge.textContent = unseen;
 }
 P.changed = () => renderLog();
+
+// "View pass" opens the pass page the way the visitor's phone would show it.
+logEl.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-pass]');
+  if (!b) return;
+  const dialog = document.getElementById('passView');
+  document.getElementById('passFrame').srcdoc = await P.renderPass(b.dataset.pass);
+  dialog.showModal();
+});
 P.subscribe((e) => { if (e.type === 'outbox') renderLog(); });
 
 // ---- Preview clock ----

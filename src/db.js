@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS appointments (
   ref_designation     TEXT,
   express             INTEGER NOT NULL DEFAULT 0, -- created by an admin, pass valid all day
   created_by          INTEGER REFERENCES users(id),
+  pass_token          TEXT,              -- secret part of the pass link sent on WhatsApp
+  checked_in_count    INTEGER,           -- how many of the group actually came
   people_count        INTEGER NOT NULL CHECK (people_count BETWEEN 1 AND 10),
   purposes            TEXT NOT NULL,     -- JSON array
   description         TEXT,
@@ -170,6 +172,8 @@ const MIGRATIONS = [
   ['ref_designation', 'TEXT'],
   ['express', 'INTEGER NOT NULL DEFAULT 0'],
   ['created_by', 'INTEGER REFERENCES users(id)'],
+  ['pass_token', 'TEXT'],
+  ['checked_in_count', 'INTEGER'],
 ];
 
 export function openDatabase(file) {
@@ -180,6 +184,7 @@ export function openDatabase(file) {
   db.exec(SCHEMA);
   const columns = new Set(db.prepare('PRAGMA table_info(appointments)').all().map((c) => c.name));
   for (const [name, type] of MIGRATIONS) if (!columns.has(name)) db.exec(`ALTER TABLE appointments ADD COLUMN ${name} ${type}`);
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS appointments_pass_token ON appointments (pass_token)');
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return db;
 }

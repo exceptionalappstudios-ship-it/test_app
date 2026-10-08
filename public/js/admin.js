@@ -93,7 +93,7 @@ function apptDetails(a) {
       ${a.purposes.length ? `<dt>Purpose</dt><dd>${a.purposes.map((p) => `<span class="tag">${esc(p)}</span>`).join(' ')}</dd>` : ''}
       ${a.description ? `<dt>Details</dt><dd>${esc(a.description)}</dd>` : ''}
       ${a.adminNote ? `<dt>Note</dt><dd>${esc(a.adminNote)}</dd>` : ''}
-      ${a.checkedInAt ? `<dt>Checked in</dt><dd><strong>${esc(formatTime(a.checkedInAt))}</strong>${a.checkedInBy ? ` by ${esc(a.checkedInBy)}` : ''}</dd>` : ''}
+      ${a.checkedInAt ? `<dt>Checked in</dt><dd><strong>${esc(formatTime(a.checkedInAt))}</strong>${a.checkedInBy ? ` by ${esc(a.checkedInBy)}` : ''}<br>${esc(`${a.checkedInCount} of ${plural(a.peopleCount, 'person', 'people')} came`)}</dd>` : ''}
       ${a.reviewedBy && !['pending'].includes(a.status) ? `<dt>Reviewed by</dt><dd>${esc(a.reviewedBy)}</dd>` : ''}
       <dt>Requested</dt><dd>${esc(formatWhen(a.createdAt))}</dd>
     </dl>`;
@@ -137,8 +137,23 @@ async function act(a, action, button) {
   return true;
 }
 
+// One-tap buttons for how many of the group came in.
+export function countButtons(max, selected) {
+  return `<div class="count-picker" role="group" aria-label="How many came">${Array.from({ length: max }, (_, i) => i + 1)
+    .map((n) => `<button type="button" data-count="${n}" class="${n === selected ? 'on' : ''}" aria-pressed="${n === selected}">${n}</button>`).join('')}</div>`;
+}
+
 function openAppointment(a, onChange) {
-  const { el, close } = openSheet(`${apptDetails(a)}${apptActions(a)}<button class="btn ghost block" data-close style="margin-top:8px">Close</button>`);
+  const countEdit = a.checkedInAt && a.peopleCount > 1 ? `<div class="label">How many came?</div>${countButtons(a.peopleCount, a.checkedInCount)}` : '';
+  const { el, close } = openSheet(`${apptDetails(a)}${countEdit}${apptActions(a)}<button class="btn ghost block" data-close style="margin-top:8px">Close</button>`);
+  el.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-count]');
+    if (!b) return;
+    await busy(b, () => api('/api/staff/count', { method: 'POST', body: { appointmentId: a.id, count: Number(b.dataset.count) } }));
+    toast(`Updated: ${plural(Number(b.dataset.count), 'person', 'people')} came.`);
+    close();
+    onChange();
+  });
   el.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-act]');
     if (!b) return;
@@ -200,7 +215,7 @@ async function homeView(ctx) {
       <div class="section-title"><span>Recent check-ins</span><a href="#/visitors" class="small">See all</a></div>
       <div class="card flush">${d.recent.length ? d.recent.map((a) => `
         <div class="person">${photoTag(a.photo, a.name)}<div class="grow"><div class="name">${esc(a.name)}</div>
-          <div class="meta">${esc(plural(a.peopleCount, 'person', 'people'))} · ${esc(a.periodLabel)}${a.checkedInBy ? ` · by ${esc(a.checkedInBy)}` : ''}</div></div>
+          <div class="meta">${esc(plural(a.checkedInCount ?? a.peopleCount, 'person', 'people'))} · ${esc(a.periodLabel)}${a.checkedInBy ? ` · by ${esc(a.checkedInBy)}` : ''}</div></div>
           <span class="meta">${esc(formatTime(a.checkedInAt))}</span></div>`).join('') : '<div class="empty">No one has checked in yet.</div>'}</div>`;
     renderChart($('#chart', ctx.el), d.days, dashDate);
   };
@@ -254,8 +269,7 @@ async function visitorsView(ctx) {
     <div class="filter-row" id="filters">
       ${[['all', 'Everyone'], ['out', 'Not arrived'], ['in', 'Checked in'], ['pending', 'Waiting'], ['hold', 'On hold']].map(([k, l]) => `<button class="filter ${visitFilter === k ? 'on' : ''}" data-f="${k}">${l}</button>`).join('')}
     </div>
-    <div class="card flush" id="list" style="margin-top:8px"></div>
-    <button class="btn blue block" id="msgAll">${icons.whatsapp} Send WhatsApp message to this day's visitors</button>`;
+    <div class="card flush" id="list" style="margin-top:8px"></div>`;
   const load = async () => {
     const params = new URLSearchParams({ date: visitDate });
     if (['in', 'out'].includes(visitFilter)) params.set('checked', visitFilter);
@@ -274,7 +288,7 @@ async function visitorsView(ctx) {
       <div class="person" data-id="${a.id}" style="cursor:pointer">
         ${photoTag(a.photo, a.name)}
         <div class="grow"><div class="name">${esc(a.name)}${a.express ? ' <span class="status express" style="font-size:.7rem;padding:2px 7px">⚡ Express</span>' : ''}</div>
-          <div class="meta">${esc(a.periodLabel)} · ${esc(plural(a.peopleCount, 'person', 'people'))}${a.checkedInAt ? ` · in at ${esc(formatTime(a.checkedInAt))}${a.checkedInBy ? ` by ${esc(a.checkedInBy)}` : ''}` : ''}</div>
+          <div class="meta">${esc(a.periodLabel)} · ${a.checkedInAt && a.checkedInCount !== a.peopleCount ? `${a.checkedInCount} of ${a.peopleCount} came` : esc(plural(a.peopleCount, 'person', 'people'))}${a.checkedInAt ? ` · in at ${esc(formatTime(a.checkedInAt))}${a.checkedInBy ? ` by ${esc(a.checkedInBy)}` : ''}` : ''}</div>
           <div style="margin-top:4px">${statusChip(a.status, a.checkedInAt)}</div></div>
         <div class="contact">${contactButtons(a.phone)}</div>
       </div>`).join('') : '<div class="empty">No visitors match.</div>';
@@ -293,27 +307,8 @@ async function visitorsView(ctx) {
     $$('#filters .filter', ctx.el).forEach((x) => x.classList.toggle('on', x === b));
     load();
   });
-  $('#msgAll', ctx.el).addEventListener('click', () => broadcastSheet(visitDate));
   await load();
   onChanged(ctx, load);
-}
-
-function broadcastSheet(date) {
-  const { el, close } = openSheet(`
-    <h2 style="margin:0 0 4px">Message visitors</h2>
-    <p class="sub">Sent on WhatsApp and in the app to everyone confirmed for <strong>${esc(formatDate(date))}</strong>.</p>
-    <label for="bp">Who</label>
-    <select id="bp"><option value="">Everyone that day</option>${Object.entries(config.periods).map(([k, p]) => `<option value="${k}">${esc(p.label)} only</option>`).join('')}</select>
-    <label for="bm">Message</label>
-    <textarea id="bm" maxlength="600" placeholder="For example: Today's meeting has moved to the main hall. Please come by 10:30 AM."></textarea>
-    <div class="actions"><button class="btn light" data-close>Cancel</button><button class="btn" data-send>${icons.send} Send</button></div>`);
-  $('[data-send]', el).addEventListener('click', async (e) => {
-    const message = $('#bm', el).value.trim();
-    if (!message) { toast('Please write a message.'); return; }
-    const { recipients } = await busy(e.currentTarget, () => api('/api/admin/broadcast', { method: 'POST', body: { date, period: $('#bp', el).value || null, message } }));
-    close();
-    toast(`Message sent to ${plural(recipients, 'visitor')}.`);
-  });
 }
 
 // ---- Security staff ------------------------------------------------------------------
@@ -373,7 +368,6 @@ function moreView(ctx) {
       ${link('#/express', icons.ticket, 'Express pass', 'Let someone in today with just a name and number')}
       ${link('/security.html#/scan', icons.scan, 'Scan passes', 'Open the scanner')}
       ${link('#/sessions', icons.calendar, 'Open days and sessions', 'Choose days, Morning / Afternoon / Evening and places')}
-      ${link('#/broadcast', icons.whatsapp, 'Send WhatsApp message', 'Tell a day\'s visitors about changes')}
       ${link('#/admins', icons.key, 'Admins', 'Add or remove admins')}
       ${link('#/outbox', icons.message, 'WhatsApp delivery', 'See sent and failed messages')}
     </div>
@@ -451,28 +445,6 @@ async function sessionsView(ctx) {
   await load();
 }
 
-async function broadcastView(ctx) {
-  await ensureToday();
-  header('Send WhatsApp message', 'Tell everyone visiting on a day about a change of time, venue and so on.');
-  let date = today;
-  const render = async () => {
-    const [{ broadcasts }, { stats }] = await Promise.all([api(`/api/admin/broadcasts?date=${date}`), api(`/api/admin/appointments?date=${date}&status=approved`)]);
-    if (!ctx.isCurrent()) return;
-    ctx.el.innerHTML = `
-      <div class="card">
-        <label for="d" style="margin-top:0">Day</label><input id="d" type="date" value="${date}">
-        <p class="sub" style="margin-top:10px">${plural(stats.approved, 'confirmed visitor')} on this day (${plural(stats.people, 'person', 'people')}).</p>
-        <button class="btn block" data-new ${stats.approved ? '' : 'disabled'}>${icons.whatsapp} Write a message</button>
-      </div>
-      <div class="section-title">Sent for this day</div>
-      <div class="card flush">${broadcasts.length ? broadcasts.map((b) => `<div class="person" style="align-items:flex-start"><div class="grow"><div style="white-space:pre-wrap">${esc(b.body)}</div>
-        <div class="meta" style="margin-top:4px">To ${plural(b.recipients, 'visitor')}${b.period ? ` (${esc(config.periods[b.period].label)})` : ''} · by ${esc(b.sent_by_name)} · ${esc(formatWhen(b.created_at))}</div></div></div>`).join('') : '<div class="empty">No messages sent for this day.</div>'}</div>`;
-    $('#d', ctx.el).addEventListener('change', (e) => { date = e.target.value || today; render(); });
-    $('[data-new]', ctx.el).addEventListener('click', () => broadcastSheet(date));
-  };
-  await render();
-}
-
 async function adminsView(ctx) {
   header('Admins', 'Admins log in with their WhatsApp number.');
   const load = async () => {
@@ -528,14 +500,15 @@ async function expressView(ctx) {
       <label for="xp">WhatsApp number <span class="muted small">(required)</span></label>
       <div class="phone-field"><span>+91</span><input id="xp" type="tel" inputmode="tel" maxlength="20" placeholder="98765 43210"></div>
       <div class="label">How many people?</div>
-      <div class="stepper"><button type="button" data-dec aria-label="Fewer">${icons.minus}</button><span class="n" data-count>1</span><button type="button" data-inc aria-label="More">${icons.plus}</button></div>
+      <div class="stepper"><button type="button" data-dec aria-label="Fewer">${icons.minus}</button><span class="n" data-num>1</span><button type="button" data-inc aria-label="More">${icons.plus}</button><span class="muted small">Up to ${config.maxPeople}</span></div>
+      <h3 style="margin:22px 0 0">Reference <span class="muted small" style="font-weight:500">(optional)</span></h3>
+      <label for="xr">Name</label><input id="xr" maxlength="120" placeholder="Who referred them">
+      <label for="xrp">Phone number</label><div class="phone-field"><span>+91</span><input id="xrp" type="tel" inputmode="tel" maxlength="20" placeholder="98765 43210"></div>
+      <label for="xrd">Designation</label><input id="xrd" maxlength="80" placeholder="For example: Teacher, Centre coordinator">
       <details style="margin-top:18px">
-        <summary style="font-weight:700;cursor:pointer;padding:6px 0">More details <span class="muted small">(optional)</span></summary>
+        <summary style="font-weight:700;cursor:pointer;padding:6px 0">Photo, purpose and note <span class="muted small">(optional)</span></summary>
         <div class="label">Photo</div>
         <div data-photo></div>
-        <label for="xr">Reference name</label><input id="xr" maxlength="120">
-        <label for="xrp">Reference phone</label><div class="phone-field"><span>+91</span><input id="xrp" type="tel" inputmode="tel" maxlength="20"></div>
-        <label for="xrd">Reference designation</label><input id="xrd" maxlength="80" placeholder="For example: Teacher">
         <div class="label">Purpose</div>
         <div class="choices">${Object.entries(config.purposes).map(([k, l]) => `<button type="button" class="choice check" data-purpose="${k}"><span class="t" style="font-weight:600">${esc(l)}</span><span class="tick">${icons.check}</span></button>`).join('')}</div>
         <label for="xd">Note</label><textarea id="xd" maxlength="500"></textarea>
@@ -545,7 +518,7 @@ async function expressView(ctx) {
     </form>`;
   const form = $('form', ctx.el);
   photoPicker($('[data-photo]', ctx.el), { prompt: 'Optional: a photo helps security recognise them.', onChange: (b) => { photo = b; } });
-  const setCount = (n) => { count = Math.max(1, Math.min(10, n)); $('[data-count]', ctx.el).textContent = count; };
+  const setCount = (n) => { count = Math.max(1, Math.min(config.maxPeople, n)); $('[data-num]', ctx.el).textContent = count; };
   $('[data-dec]', ctx.el).addEventListener('click', () => setCount(count - 1));
   $('[data-inc]', ctx.el).addEventListener('click', () => setCount(count + 1));
   $$('[data-purpose]', ctx.el).forEach((b) => b.addEventListener('click', () => {
@@ -610,7 +583,6 @@ const router = createRouter({
     { path: /^#\/more$/, view: moreView, tab: 'more' },
     { path: /^#\/express$/, view: expressView, tab: 'home', back: '#/home' },
     { path: /^#\/sessions$/, view: sessionsView, tab: 'more', back: '#/more' },
-    { path: /^#\/broadcast$/, view: broadcastView, tab: 'more', back: '#/more' },
     { path: /^#\/admins$/, view: adminsView, tab: 'more', back: '#/more' },
     { path: /^#\/outbox$/, view: outboxView, tab: 'more', back: '#/more' },
   ],

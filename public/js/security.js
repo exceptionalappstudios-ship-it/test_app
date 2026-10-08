@@ -1,4 +1,4 @@
-import { $, api, esc, formatTime, formatPhone, plural, photoTag, openSheet, toast, createRouter, liveStream, homeFor, throttle } from './common.js';
+import { $, api, esc, formatTime, formatPhone, plural, photoTag, openSheet, toast, busy, createRouter, liveStream, homeFor, throttle } from './common.js';
 import { icons } from './icons.js';
 import { renderLogin, renderProfileSetup } from './login.js';
 import { startScanner } from './scanner.js';
@@ -74,7 +74,24 @@ async function scanView(ctx) {
     const { checkins, people } = await api('/api/staff/recent');
     if (!ctx.isCurrent()) return;
     recent.innerHTML = `<div class="section-title"><span>Let in by you today</span><span>${esc(plural(people, 'person', 'people'))}</span></div>
-      <div class="card flush">${checkins.length ? checkins.map((a) => `<div class="person">${photoTag(a.photo, a.name)}<div class="grow"><div class="name">${esc(a.name)}</div><div class="meta">${esc(plural(a.peopleCount, 'person', 'people'))} · ${esc(a.periodLabel)}</div></div><span class="meta">${esc(formatTime(a.checkedInAt))}</span></div>`).join('') : '<div class="empty">No one yet today.</div>'}</div>`;
+      <div class="card flush">${checkins.length ? checkins.map((a) => `<button type="button" class="person person-btn" data-id="${a.id}">${photoTag(a.photo, a.name)}<div class="grow"><div class="name">${esc(a.name)}</div><div class="meta">${esc(a.checkedInCount !== a.peopleCount ? `${a.checkedInCount} of ${a.peopleCount} came` : plural(a.peopleCount, 'person', 'people'))} · ${esc(a.periodLabel)}</div></div><span class="meta">${esc(formatTime(a.checkedInAt))}</span>${a.peopleCount > 1 ? `<span class="edit-hint">${icons.edit}</span>` : ''}</button>`).join('') : '<div class="empty">No one yet today.</div>'}</div>
+      ${checkins.some((a) => a.peopleCount > 1) ? '<p class="small muted center">Tap a group to change how many came in.</p>' : ''}`;
+    recent.onclick = (e) => {
+      const row = e.target.closest('[data-id]');
+      const a = row && checkins.find((x) => x.id === Number(row.dataset.id));
+      if (!a || a.peopleCount < 2) return;
+      const { el, close } = openSheet(`<div class="center">${photoTag(a.photo, a.name, 'lg')}<h2 style="margin-top:8px">${esc(a.name)}</h2><p class="sub">${esc(plural(a.peopleCount, 'person', 'people'))} booked. How many came in?</p></div>
+        <div class="count-picker">${Array.from({ length: a.peopleCount }, (_, i) => i + 1).map((n) => `<button type="button" data-count="${n}" class="${n === a.checkedInCount ? 'on' : ''}">${n}</button>`).join('')}</div>
+        <button class="btn ghost block" data-close style="margin-top:10px">Close</button>`);
+      el.addEventListener('click', async (ev) => {
+        const b = ev.target.closest('[data-count]');
+        if (!b) return;
+        await busy(b, () => api('/api/staff/count', { method: 'POST', body: { appointmentId: a.id, count: Number(b.dataset.count) } }));
+        toast(`Saved: ${plural(Number(b.dataset.count), 'person', 'people')} came in.`);
+        close();
+        loadRecent();
+      });
+    };
   };
   const stop = await startScanner(area, { isAdmin: user.role === 'admin', onDone: loadRecent });
   ctx.onCleanup(stop);

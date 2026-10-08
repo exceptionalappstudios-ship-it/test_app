@@ -1,9 +1,10 @@
 import express from 'express';
-import crypto from 'node:crypto';
 import { transaction } from '../db.js';
 import { requireAdmin, publicUser } from '../auth.js';
 import { HttpError, text, phone as parsePhone, normalizePhone } from '../http.js';
-import { ACTIVE, APPOINTMENT_SELECT, PURPOSES, getAppointment, viewsWithPeople, currentPeriod } from '../appointments.js';
+import {
+  ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, viewsWithPeople, currentPeriod, newCheckinCode, newPassToken, passMessage,
+} from '../appointments.js';
 import { nowInTimezone, minutesUntil, addDays, dayOfWeek, formatVisit, formatClock, formatDay, PERIODS, DATE_RE } from '../time.js';
 
 export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
@@ -22,7 +23,7 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
       SELECT s.period, s.capacity,
         COUNT(a.id) AS bookings, COALESCE(SUM(a.people_count), 0) AS people,
         COUNT(a.checked_in_at) AS checkedInBookings,
-        COALESCE(SUM(CASE WHEN a.checked_in_at IS NOT NULL THEN a.people_count END), 0) AS checkedInPeople
+        COALESCE(SUM(CASE WHEN a.checked_in_at IS NOT NULL THEN COALESCE(a.checked_in_count, a.people_count) END), 0) AS checkedInPeople
       FROM visit_sessions s LEFT JOIN appointments a ON a.session_id = s.id AND a.status = 'approved'
       WHERE s.date = ? GROUP BY s.id
     `).all(date);
@@ -43,7 +44,7 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
     const from = addDays(date, -6);
     const to = addDays(date, 7);
     const series = new Map(db.prepare(`
-      SELECT date, SUM(people_count) AS people, SUM(CASE WHEN checked_in_at IS NOT NULL THEN people_count ELSE 0 END) AS checkedIn
+      SELECT date, SUM(people_count) AS people, SUM(CASE WHEN checked_in_at IS NOT NULL THEN COALESCE(checked_in_count, people_count) ELSE 0 END) AS checkedIn
       FROM appointments WHERE status = 'approved' AND date BETWEEN ? AND ? GROUP BY date
     `).all(from, to).map((r) => [r.date, r]));
     const days = [];
@@ -53,7 +54,8 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
       date, today: t,
       summary: {
         bookings: sum('bookings'), people: sum('people'), checkedInBookings: sum('checkedInBookings'),
-        checkedInPeople: sum('checkedInPeople'), remainingPeople: sum('people') - sum('checkedInPeople'), capacity: sum('capacity'),
+        checkedInPeople: sum('checkedInPeople'), capacity: sum('capacity'),
+        remainingPeople: db.prepare("SELECT COALESCE(SUM(people_count), 0) AS n FROM appointments WHERE date = ? AND status = 'approved' AND checked_in_at IS NULL").get(date).n,
         ...counts,
       },
       sessions,
@@ -95,12 +97,12 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
           SUM(status = 'approved') AS approved, SUM(status = 'pending') AS pending, SUM(status = 'hold') AS hold,
           COALESCE(SUM(CASE WHEN status = 'approved' THEN people_count END), 0) AS people,
           SUM(status = 'approved' AND checked_in_at IS NOT NULL) AS checkedIn,
-          COALESCE(SUM(CASE WHEN status = 'approved' AND checked_in_at IS NOT NULL THEN people_count END), 0) AS checkedInPeople
+          COALESCE(SUM(CASE WHEN status = 'approved' AND checked_in_at IS NOT NULL THEN COALESCE(checked_in_count, people_count) END), 0) AS checkedInPeople
         FROM appointments WHERE date = ?
       `).get(req.query.date);
       for (const k in stats) stats[k] ??= 0;
       stats.remaining = stats.approved - stats.checkedIn;
-      stats.remainingPeople = stats.people - stats.checkedInPeople;
+      stats.remainingPeople = db.prepare("SELECT COALESCE(SUM(people_count), 0) AS n FROM appointments WHERE date = ? AND status = 'approved' AND checked_in_at IS NULL").get(req.query.date).n;
     }
     res.json({ appointments: viewsWithPeople(db, rows), stats });
   });
@@ -122,9 +124,11 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
     db.prepare(`
       UPDATE appointments SET status = ?, admin_note = COALESCE(?, admin_note), reviewed_by = ?, updated_at = datetime('now'),
         checkin_code = CASE WHEN ? THEN COALESCE(checkin_code, ?) ELSE checkin_code END,
+        pass_token = CASE WHEN ? THEN COALESCE(pass_token, ?) ELSE pass_token END,
         reminded_day_before = reminded_day_before OR ?, greeted = greeted OR ?
       WHERE id = ?
-    `).run(status, note, req.user.id, approved ? 1 : 0, crypto.randomBytes(18).toString('base64url'), skipReminder ? 1 : 0, skipGreeting ? 1 : 0, appt.id);
+    `).run(status, note, req.user.id, approved ? 1 : 0, approved ? newCheckinCode(db) : null, approved ? 1 : 0, approved ? newPassToken() : null,
+      skipReminder ? 1 : 0, skipGreeting ? 1 : 0, appt.id);
 
     const when = formatVisit(appt);
     const opens = formatClock(periods[appt.period].start);
@@ -159,7 +163,7 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
     const name = text(body.name, 'their name', 80);
     const phone = parsePhone(body.phone, config.defaultCountryCode, 'their WhatsApp number');
     const count = body.peopleCount === undefined || body.peopleCount === '' ? 1 : Number(body.peopleCount);
-    if (!Number.isInteger(count) || count < 1 || count > 10) throw new HttpError(400, 'Please choose between 1 and 10 people');
+    if (!Number.isInteger(count) || count < 1 || count > MAX_PEOPLE) throw new HttpError(400, `Please choose between 1 and ${MAX_PEOPLE} people`);
     const photo = typeof body.photo === 'string' && body.photo ? body.photo : null;
     if (photo && !photos.read(photo)) throw new HttpError(400, 'The photo was not saved. Please take it again.');
     const reference = text(body.reference, 'the reference', 120, { required: false });
@@ -188,41 +192,18 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
         ?? db.prepare('INSERT INTO visit_sessions (date, period, capacity, is_closed) VALUES (?, ?, 0, 1) RETURNING *').get(t, period);
       const appt = db.prepare(`
         INSERT INTO appointments (user_id, session_id, date, period, name, phone, photo, reference, ref_phone, ref_designation, people_count, purposes, description,
-          status, express, created_by, reviewed_by, checkin_code, reminded_day_before, greeted, pass_sent_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 1, ?, ?, ?, 1, 1, datetime('now')) RETURNING id
+          status, express, created_by, reviewed_by, checkin_code, pass_token, reminded_day_before, greeted, pass_sent_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 1, ?, ?, ?, ?, 1, 1, datetime('now')) RETURNING id
       `).get(user.id, session.id, t, period, name, phone, photo ?? user.photo, reference, refPhone, refDesignation || null, count,
-        JSON.stringify(purposes), description || null, req.user.id, req.user.id, crypto.randomBytes(18).toString('base64url'));
+        JSON.stringify(purposes), description || null, req.user.id, req.user.id, newCheckinCode(db), newPassToken());
       db.prepare('INSERT INTO appointment_people (appointment_id, name, phone, is_booker) VALUES (?, ?, ?, 1)').run(appt.id, name, phone);
       return appt.id;
     });
 
     const appt = getAppointment(db, id);
-    notifier.sendPass(appt, 'Your express entry pass 🎟️',
-      `${name}, this is your express pass for today (${formatDay(t)}) for ${count} ${count === 1 ? 'person' : 'people'}. Show it at the entrance. It is valid only today and can be scanned only once.`);
+    notifier.sendPass(appt, 'Your express entry pass 🎟️', passMessage(appt, `today (${formatDay(t)})`));
     notifier.emitToStaff('appointment', { id });
     res.status(201).json({ appointment: viewsWithPeople(db, [appt])[0] });
-  });
-
-  // ---- WhatsApp message to everyone visiting on a day ---------------------------------
-
-  router.post('/broadcast', (req, res) => {
-    const date = dateParam(req.body?.date, null);
-    if (!date) throw new HttpError(400, 'Please choose a date');
-    const period = PERIODS.includes(req.body?.period) ? req.body.period : null;
-    const message = text(req.body?.message, 'the message', 600);
-    const rows = db.prepare(`SELECT * FROM appointments WHERE date = ? AND status = 'approved' ${period ? 'AND period = ?' : ''}`)
-      .all(...[date, period].filter(Boolean));
-    if (!rows.length) throw new HttpError(400, 'There are no confirmed visitors for this day.');
-    for (const a of rows) notifier.notify(a.user_id, a.id, 'Message from the ashram', message, { phone: a.phone, kind: 'broadcast' });
-    db.prepare('INSERT INTO broadcasts (date, period, body, recipients, sent_by) VALUES (?, ?, ?, ?, ?)').run(date, period, message, rows.length, req.user.id);
-    res.json({ recipients: rows.length });
-  });
-
-  router.get('/broadcasts', (req, res) => {
-    const date = dateParam(req.query.date, today());
-    res.json({ broadcasts: db.prepare(`
-      SELECT b.*, u.name AS sent_by_name FROM broadcasts b JOIN users u ON u.id = b.sent_by WHERE b.date = ? ORDER BY b.id DESC
-    `).all(date) });
   });
 
   // ---- Security staff ------------------------------------------------------------------

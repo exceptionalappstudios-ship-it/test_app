@@ -172,7 +172,7 @@ test('booking asks for reference, people, purposes and checks everyone has only 
   await bad({ refDesignation: '' }, /designation/);
   await bad({ purposes: [] }, /purpose/);
   await bad({ purposes: ['other'], description: '' }, /few words/);
-  await bad({ peopleCount: 11 }, /between 1 and 10/);
+  await bad({ peopleCount: 6 }, /between 1 and 5/);
   await bad({ peopleCount: 2, people: [] }, /1 other person/);
   await bad({ peopleCount: 2, people: [{ name: 'Me Again', phone: '9876543210' }] }, /same as you/);
 
@@ -261,6 +261,7 @@ test('hold, approve, reminders, greeting, QR pass at session start, scan once', 
   const sid2 = (await a('/api/admin/security')).body.staff[0].id;
   await a(`/api/admin/security/${sid2}/approve`, { method: 'POST' });
   const code = db.prepare('SELECT checkin_code FROM appointments WHERE id = ?').get(appt.id).checkin_code;
+  assert.match(code, /^[A-HJ-NP-Z2-9]{6}$/);
   const early = (await sRes('/api/staff/scan', { method: 'POST', body: { code } })).body;
   assert.deepEqual([early.result, early.canAdmit, early.adminOverride], ['early', false, undefined]);
   assert.match(early.message, /Afternoon passes open at 1:00 PM/);
@@ -269,8 +270,10 @@ test('hold, approve, reminders, greeting, QR pass at session start, scan once', 
   assert.equal(await runAt('2030-01-11', '13:00'), 1);      // the pass
   const passMsg = sent.filter((s) => s.body?.template?.name === 'entry_pass').at(-1).body;
   assert.equal(passMsg.to, '919876543210');
-  assert.equal(passMsg.template.components[0].parameters[0].image.id, 'media-1');
-  assert.match(templateText(sent.at(-1)), /valid only today and can be scanned only once/);
+  const token = passMsg.template.components.find((c) => c.type === 'button').parameters[0].text;
+  assert.match(token, /^[\w-]{20,}$/);
+  assert.equal(sent.filter((s) => s.url.endsWith('/media')).length, 0); // a link, not an image
+  assert.match(templateText(sent.at(-1)), /Entry code: [A-HJ-NP-Z2-9]{6}\. Tap "View pass".*valid only today and can be scanned only once/);
   assert.equal(await runAt('2030-01-11', '13:01'), 0);
 
   const ready = await pass();
@@ -278,11 +281,12 @@ test('hold, approve, reminders, greeting, QR pass at session start, scan once', 
   assert.equal(ready.code, code);
   assert.match(ready.svg, /^<svg/);
 
-  const scan = (await sRes('/api/staff/scan', { method: 'POST', body: { code } })).body;
+  const scan = (await sRes('/api/staff/scan', { method: 'POST', body: { code: ` ${code.toLowerCase()} ` } })).body;
   assert.deepEqual([scan.result, scan.canAdmit, scan.appointment.name, scan.appointment.peopleCount], ['ok', true, 'Asha Rao', 2]);
   assert.equal(scan.appointment.people[0].name, 'Meera Rao');
   assert.ok(scan.appointment.photo);
   assert.equal((await sRes(scan.appointment.photo)).status, 200);
+  assert.equal((await sRes('/api/staff/admit', { method: 'POST', body: { code, count: 3 } })).status, 400); // more than booked
   assert.equal((await sRes('/api/staff/admit', { method: 'POST', body: { code } })).status, 200);
 
   const again = (await sRes('/api/staff/scan', { method: 'POST', body: { code } })).body;
@@ -319,7 +323,7 @@ test('approving on the day skips the reminders and sends the pass right away', a
   await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: {} });
   assert.equal(app.locals.jobs.run(), 1);
   await flush();
-  const titles = sent.filter((s) => s.body?.to === '919876543210' && s.body.template.name !== 'login_code').map((s) => s.body.template.components.at(-1).parameters[0].text);
+  const titles = sent.filter((s) => s.body?.to === '919876543210' && s.body.template.name !== 'login_code').map((s) => s.body.template.components.find((c) => c.type === 'body').parameters[0].text);
   assert.deepEqual(titles, ['Request received 🙏', 'Appointment confirmed ✅', 'Your entry pass 🎟️']);
 });
 
@@ -355,22 +359,58 @@ test('dashboard, date list with search, and who checked people in', async () => 
   assert.equal((await a('/api/admin/appointments?date=2030-01-10&q=swami')).body.appointments.length, 2);
 });
 
-test('admins can message everyone visiting on a day', async () => {
+test('the WhatsApp pass link opens a small secure pass page', async () => {
   const a = await admin();
   await openSessions(a);
-  const sid = await sessionId('2030-01-11', 'morning');
-  for (const [p, n] of [['9800000001', 'Asha'], ['9800000002', 'Ravi']]) {
-    const v = await visitor(p, n);
-    const appt = (await v('/api/appointments', { method: 'POST', body: booking(sid) })).body.appointment;
-    await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: {} });
-  }
-  const res = await a('/api/admin/broadcast', { method: 'POST', body: { date: '2030-01-11', message: 'Venue changed to Hall B.' } });
-  assert.equal(res.body.recipients, 2);
-  await flush();
-  const broadcasts = sent.filter((s) => s.body?.template && templateText(s).includes('Hall B'));
-  assert.equal(broadcasts.length, 2);
-  assert.equal((await a('/api/admin/broadcasts?date=2030-01-11')).body.broadcasts[0].recipients, 2);
-  assert.equal((await a('/api/admin/broadcast', { method: 'POST', body: { date: '2030-01-20', message: 'x' } })).status, 400);
+  const sid = await sessionId('2030-01-11', 'afternoon');
+  const v = await visitor();
+  const appt = (await v('/api/appointments', { method: 'POST', body: booking(sid) })).body.appointment;
+  await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: {} });
+  const { pass_token: token, checkin_code: code } = db.prepare('SELECT pass_token, checkin_code FROM appointments WHERE id = ?').get(appt.id);
+  const page = async () => { const r = await fetch(`${base}/p/${token}`); return { status: r.status, html: await r.text(), headers: r.headers }; };
+
+  let p = await page(); // the day before: no QR yet
+  assert.equal(p.status, 200);
+  assert.match(p.html, /Your QR pass will appear here on<br><strong>Friday, 11 January, 1:00 PM/);
+  assert.doesNotMatch(p.html, new RegExp(code));
+  assert.equal(p.headers.get('cache-control'), 'no-store');
+  assert.match(p.headers.get('content-security-policy'), /default-src 'none'/);
+
+  at(IST('2030-01-11', '13:05'));
+  p = await page();
+  assert.match(p.html, /<svg/);
+  assert.match(p.html, new RegExp(`class="code">${code}<`));
+  assert.match(p.html, /Valid today · scan once/);
+  assert.ok(Buffer.byteLength(p.html) < 12000, `page is ${Buffer.byteLength(p.html)} bytes`);
+
+  await a('/api/staff/admit', { method: 'POST', body: { code } });
+  p = await page();
+  assert.match(p.html, /Checked in/);
+  assert.doesNotMatch(p.html, /<svg/);
+  assert.equal((await fetch(`${base}/p/not-a-real-token-1234567`)).status, 404);
+  // The broadcast feature is gone.
+  assert.equal((await a('/api/admin/broadcast', { method: 'POST', body: {} })).status, 404);
+});
+
+test('security can correct how many people came in', async () => {
+  const a = await admin();
+  await openSessions(a);
+  const sid = await sessionId('2030-01-10', 'morning');
+  const v = await visitor();
+  const people = [1, 2, 3, 4].map((i) => ({ name: `P${i}`, phone: `970000000${i}` }));
+  const appt = (await v('/api/appointments', { method: 'POST', body: booking(sid, { peopleCount: 5, people }) })).body.appointment;
+  await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: {} });
+  const s = await login('9811111111', { signupAs: 'security', name: 'Ramesh Guard' });
+  await a(`/api/admin/security/${(await a('/api/admin/security')).body.staff[0].id}/approve`, { method: 'POST' });
+  const admitted = (await s('/api/staff/admit', { method: 'POST', body: { appointmentId: appt.id, count: 3 } })).body.appointment;
+  assert.deepEqual([admitted.peopleCount, admitted.checkedInCount], [5, 3]);
+  let d = (await a('/api/admin/dashboard')).body.summary;
+  assert.deepEqual([d.people, d.checkedInPeople, d.remainingPeople], [5, 3, 0]);
+  assert.equal((await s('/api/staff/count', { method: 'POST', body: { appointmentId: appt.id, count: 4 } })).body.appointment.checkedInCount, 4);
+  assert.equal((await s('/api/staff/count', { method: 'POST', body: { appointmentId: appt.id, count: 6 } })).status, 400);
+  assert.equal((await s('/api/staff/recent')).body.people, 4);
+  d = (await a('/api/admin/dashboard')).body.summary;
+  assert.equal(d.checkedInPeople, 4);
 });
 
 test('photos are private to their owner and staff', async () => {
@@ -408,7 +448,8 @@ test('admins can create an express pass that is sent at once and valid all day',
   assert.equal(missing.status, 400);
 
   const photo = (await a('/api/admin/photos', { method: 'POST', raw: JPEG })).body.photo;
-  const res = await a('/api/admin/express', { method: 'POST', body: { name: 'Gopal Rao', phone: '9845011111', peopleCount: 3, photo } });
+  assert.equal((await a('/api/admin/express', { method: 'POST', body: { name: 'Gopal Rao', phone: '9845011111', peopleCount: 6 } })).status, 400);
+  const res = await a('/api/admin/express', { method: 'POST', body: { name: 'Gopal Rao', phone: '9845011111', peopleCount: 3, photo, reference: 'Swami Ji' } });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   const appt = res.body.appointment;
   assert.deepEqual([appt.status, appt.express, appt.peopleCount, appt.period, appt.createdBy, appt.passSent], ['approved', true, 3, 'morning', 'Seva Admin', true]);
@@ -416,7 +457,7 @@ test('admins can create an express pass that is sent at once and valid all day',
   await flush();
   const pass = sent.filter((x) => x.body?.template?.name === 'entry_pass').at(-1).body;
   assert.equal(pass.to, '919845011111');
-  assert.match(templateText(sent.at(-1)), /express pass for today/);
+  assert.match(templateText(sent.at(-1)), /entry pass for today .* for 3 people\. Entry code: [A-HJ-NP-Z2-9]{6}/);
 
   // Valid straight away, even before the session opens; still only once.
   const code = db.prepare('SELECT checkin_code FROM appointments WHERE id = ?').get(appt.id).checkin_code;

@@ -1,4 +1,5 @@
 import { nowInTimezone, minutesUntil, addDays, formatVisit, formatClock, formatDay, PERIOD_LABELS } from './time.js';
+import { ensurePass, passMessage } from './appointments.js';
 
 // Scheduled WhatsApp + in-app messages for confirmed visits:
 //   - the day before (at REMINDER_TIME): "your visit is tomorrow, your QR pass comes tomorrow"
@@ -43,11 +44,11 @@ export function createJobs({ db, notifier, config, now = () => new Date() }) {
     // Passes go out when each session opens.
     const due = db.prepare(`SELECT * FROM appointments WHERE status = 'approved' AND date = ? AND pass_sent_at IS NULL AND checked_in_at IS NULL`).all(today);
     const markPass = db.prepare("UPDATE appointments SET pass_sent_at = datetime('now'), greeted = 1, reminded_day_before = 1 WHERE id = ?");
-    for (const a of due) {
-      if (minutesUntil(today, periods[a.period].start, timeZone, now()) > 0) continue;
+    for (const row of due) {
+      if (minutesUntil(today, periods[row.period].start, timeZone, now()) > 0) continue;
+      const a = ensurePass(db, row);
       markPass.run(a.id);
-      notifier.sendPass(a, 'Your entry pass 🎟️',
-        `${a.name}, this is your QR pass for today (${formatDay(today)}, ${PERIOD_LABELS[a.period]}) for ${a.people_count} ${a.people_count === 1 ? 'person' : 'people'}. Show it at the entrance. It is valid only today and can be scanned only once.`);
+      notifier.sendPass(a, 'Your entry pass 🎟️', passMessage(a, `today (${formatDay(today)}, ${PERIOD_LABELS[a.period]})`));
       sent++;
     }
     return sent;

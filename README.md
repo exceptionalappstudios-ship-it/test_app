@@ -6,30 +6,35 @@ A simple, fast, mobile-first web app (installable on phones) for visits to meet 
 - Log in with their **WhatsApp number and a one-time code**. First time: add name and a **face photo**. The phone finds
   the face, crops around it and compresses it (~30 KB) so security can recognise them.
 - Book a **day** and **Morning / Afternoon / Evening** (no times shown), then answer: who referred them (**name, phone number
-  and designation**, all required, so the ashram can call to confirm), how many people (1–10), the WhatsApp number for the
+  and designation**, all required, so the ashram can call to confirm), how many people (1–5), the WhatsApp number for the
   pass, purpose (blessings / guidance, invitation, project proposal, donation, life event, other) and a few words about the visit.
 - Add the **name and number of each extra person**. Everyone can have only **one upcoming appointment**. If someone already
   has one, the app says when, and asks to cancel it or remove the person.
 - Updates **on WhatsApp and in the app**: request received, confirmed, reminder the day before, greeting on the day, and
-  the **QR entry pass** when the session opens (8 AM / 1 PM / 4 PM). The pass works **only that day** and **only once**.
+  the **entry pass** when the session opens (8 AM / 1 PM / 4 PM). WhatsApp gets a **6-character entry code** (letters and
+  numbers, no look-alikes such as 0/O or 1/I) and a **"View pass" link** to a tiny pass page (about 5 KB) that opens fast
+  even on a weak signal. The pass works **only that day** and **only once**.
+- About screenshots: no website can fully block screenshots or screen recording. The pass page shows a live clock and a
+  moving band, hides itself when the phone switches apps, and blocks long-press saving. Because each pass can be scanned
+  only once and security checks the photo, a copied pass does not help anyone get in twice.
 
 **Security staff** (`/security.html`)
 - Separate sign-up (name, number, face photo). An **admin must approve** them before the scanner opens; access can be removed at any time.
-- One screen: **scan**. A valid pass shows the booker's **photo, name and number of people** with a big green **Allow entry**
-  button. A used pass shows a red **ALREADY CHECKED IN** alert with when and by whom.
+- One screen: **scan** (camera, or type the 6-character code). A valid pass shows the booker's **photo, name and number of
+  people**, one-tap buttons for **how many actually came** (e.g. 3 of 5), and a big green **Allow entry** button. A used pass
+  shows a red **ALREADY CHECKED IN** alert with when and by whom. Today's list lets them correct the number in one tap.
 
 **Admins** (`/admin.html`)
 - **Dashboard**: people checked in vs expected, Morning / Afternoon / Evening progress, a 14-day chart, recent check-ins with
   the security person who let them in. Updates live.
 - **Requests**: Approve, **Hold** (separate list to decide later) or Decline. The reference shows with one-tap call and
   WhatsApp so admins can check it.
-- **Express pass**: let someone in today with just a **name and WhatsApp number** (photo, group size, reference and purpose
+- **Express pass**: let someone in today with just a **name and WhatsApp number** (reference, photo, group size and purpose
   optional). The QR pass is sent on WhatsApp at once and works for the rest of the day, scanned once.
 - **Visitors**: any day's list with search, filters (not arrived / checked in / …), counts, and one-tap **call** and **WhatsApp**.
   Admins can also check someone in.
 - **Security**: approve, search, call/WhatsApp, remove access.
-- **More**: open days and set places per session, **send a WhatsApp message to everyone visiting on a day** (change of time,
-  venue…), add admins, WhatsApp delivery log, and the scanner.
+- **More**: open days and set places per session, add admins, WhatsApp delivery log, and the scanner.
 
 Everyone uses the same login. After logging in, each person sees the app for their role. Inner screens have a back arrow,
 and the phone's Back button steps back through the booking and closes pop-ups.
@@ -61,9 +66,10 @@ The app uses Meta's official **WhatsApp Cloud API**. Meta charges a small fee pe
    | --- | --- | --- |
    | `login_code` | Authentication | Standard code message with a **Copy code** button |
    | `appointment_update` | Utility | Body: `{{1}}` new line `{{2}}` |
-   | `entry_pass` | Utility | **Image** header; body: `{{1}}` new line `{{2}}` |
+   | `entry_pass` | Utility | Body: `{{1}}` new line `{{2}}`; **URL button** "View pass" → `https://YOUR-DOMAIN/p/{{1}}` |
 
-   `{{1}}` is the title (e.g. "Appointment confirmed ✅") and `{{2}}` the message. The QR code is sent as the header image.
+   `{{1}}` is the title (e.g. "Appointment confirmed ✅") and `{{2}}` the message (it includes the 6-character entry code).
+   The pass button's `{{1}}` is the secret part of the pass link, filled in automatically.
 3. Remove `SHOW_OTP_ON_SCREEN` and restart.
 
 Messages go through a queue that retries failures and survives restarts. **More → WhatsApp delivery** shows what was sent.
@@ -85,7 +91,7 @@ side on sample data (with a preview clock to skip ahead to reminders and passes)
 
 ```bash
 npm run dev   # restart on changes
-npm test      # API tests: login codes, roles, booking rules, reminders, QR pass, scanning, dashboard, broadcast
+npm test      # API tests: login codes, roles, booking rules, reminders, pass link, scanning, people count, dashboard, express
 ```
 
 ```
@@ -95,7 +101,8 @@ src/
   routes/auth.js      WhatsApp code login, profile, photos
   routes/visitor.js   availability, booking rules, my visit, pass
   routes/staff.js     scanner (security + admins)
-  routes/admin.js     dashboard, requests, visitors, security staff, sessions, broadcast, admins
+  routes/admin.js     dashboard, requests, visitors, security staff, sessions, express pass, admins
+  passPage.js         the small pass page opened from the WhatsApp link
   appointments.js     pass and scan rules
   jobs.js             day-before reminder, greeting, QR pass at session start
   whatsapp.js         WhatsApp Cloud API with a durable send queue

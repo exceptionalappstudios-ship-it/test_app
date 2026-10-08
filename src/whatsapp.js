@@ -1,5 +1,3 @@
-import QRCode from 'qrcode';
-
 // WhatsApp delivery through the Meta WhatsApp Cloud API.
 //
 // Every message goes into the outbound_messages table first and is sent by a
@@ -10,7 +8,8 @@ import QRCode from 'qrcode';
 // Business-initiated WhatsApp messages must use templates approved by Meta:
 //   otp    - Authentication template with a "copy code" button ({{1}} = code)
 //   update - Utility template, body "{{1}}\n\n{{2}}" (title, message)
-//   pass   - Utility template with an IMAGE header, body "{{1}}\n\n{{2}}"
+//   pass   - Utility template, body "{{1}}\n\n{{2}}" and a "View pass" URL button
+//            pointing to <APP_URL>/p/{{1}} (the secret pass link)
 export function createWhatsApp(db, config) {
   const wa = config.whatsapp;
   const fetchFn = config.fetch ?? fetch;
@@ -41,25 +40,14 @@ export function createWhatsApp(db, config) {
   const clean = (s) => String(s).replace(/\s*\n+\s*/g, ' · ').replace(/\s{2,}/g, ' ').trim().slice(0, 1000);
   const param = (s) => ({ type: 'text', text: clean(s) });
 
-  async function post(path, body, headers = { 'Content-Type': 'application/json' }) {
+  async function post(path, body) {
     const res = await fetchFn(graph(path), {
       method: 'POST',
-      headers: { Authorization: `Bearer ${wa.token}`, ...headers },
-      body: headers['Content-Type'] === 'application/json' ? JSON.stringify(body) : body,
+      headers: { Authorization: `Bearer ${wa.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`WhatsApp API ${res.status}: ${(await res.text()).slice(0, 300)}`);
     return res.json();
-  }
-
-  async function uploadQr(code) {
-    const png = await QRCode.toBuffer(code, { type: 'png', width: 640, margin: 3, errorCorrectionLevel: 'M' });
-    const form = new FormData();
-    form.append('messaging_product', 'whatsapp');
-    form.append('type', 'image/png');
-    form.append('file', new Blob([png], { type: 'image/png' }), 'entry-pass.png');
-    const res = await fetchFn(graph('media'), { method: 'POST', headers: { Authorization: `Bearer ${wa.token}` }, body: form });
-    if (!res.ok) throw new Error(`WhatsApp media upload ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    return (await res.json()).id;
   }
 
   function templateBody(row) {
@@ -73,10 +61,10 @@ export function createWhatsApp(db, config) {
       ] } };
     }
     if (row.kind === 'pass') {
-      return async () => ({ ...base, template: { name: wa.passTemplate, language: { code: wa.language }, components: [
-        { type: 'header', parameters: [{ type: 'image', image: { id: await uploadQr(p.code) } }] },
+      return { ...base, template: { name: wa.passTemplate, language: { code: wa.language }, components: [
         { type: 'body', parameters: [param(p.title), param(p.body)] },
-      ] } });
+        { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: p.token }] },
+      ] } };
     }
     return { ...base, template: { name: wa.template, language: { code: wa.language }, components: [
       { type: 'body', parameters: [param(p.title), param(p.body)] },
@@ -85,9 +73,7 @@ export function createWhatsApp(db, config) {
 
   async function deliver(row) {
     try {
-      let body = templateBody(row);
-      if (typeof body === 'function') body = await body();
-      await post('messages', body);
+      await post('messages', templateBody(row));
       markSent.run(row.id);
     } catch (err) {
       markRetry.run(err.message.slice(0, 500), row.id);
@@ -128,7 +114,7 @@ export function createWhatsApp(db, config) {
       if (!wa?.token && config.logOutbound) console.log(`[whatsapp → ${phone}] Login code: ${code}`);
     },
     sendUpdate: (phone, title, body, kind = 'update') => enqueue(kind, phone, { title, body }, `${title}: ${clean(body)}`),
-    sendPass: (phone, code, title, body) => enqueue('pass', phone, { code, title, body }, `[QR pass] ${title}: ${clean(body)}`),
+    sendPass: (phone, token, title, body) => enqueue('pass', phone, { token, title, body }, `[Pass link] ${title}: ${clean(body)} ${config.appUrl}/p/${token}`),
     kick,
   };
 }

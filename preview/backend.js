@@ -5,10 +5,11 @@
 // to see reminders, the greeting and the QR pass arrive.
 import QRCode from 'qrcode';
 import { nowInTimezone, minutesUntil, addDays, dayOfWeek, formatVisit, formatClock, formatDay, parsePeriodTimes, PERIODS, PERIOD_LABELS, DATE_RE } from '../src/time.js';
-import { PURPOSES, passState, scanResult, currentPeriod } from '../src/appointments.js';
+import { PURPOSES, MAX_PEOPLE, passState, scanResult, currentPeriod } from '../src/appointments.js';
+import { renderPassPage } from '../src/passPage.js';
 
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
-const STORE_KEY = 'meet-gurudev-preview-v3';
+const STORE_KEY = 'meet-gurudev-preview-v4';
 const periods = parsePeriodTimes();
 const CONFIG = { reminderTime: '18:00', greetingTime: '07:00' };
 const CONTACT = { phone: '+91 80 1234 5678', whatsapp: '+918012345678', address: 'Main Ashram Office, Bengaluru' };
@@ -23,7 +24,11 @@ const clock = () => nowInTimezone(TZ, now()).time;
 const sqlNow = () => now().toISOString().replace('T', ' ').slice(0, 19);
 const sqlAt = (date, time) => new Date(`${date}T${time}`).toISOString().replace('T', ' ').slice(0, 19);
 const opts = () => ({ timeZone: TZ, periods, now: now() });
-const code = () => Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[b % 64]).join('');
+const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const code = () => { for (;;) { const c = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => CODE_CHARS[b % CODE_CHARS.length]).join(''); if (!db.appointments.some((a) => a.checkin_code === c)) return c; } };
+const token = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[b % 64]).join('');
+const passText = (a, when) => `${a.name}, your entry pass for ${when} for ${a.people_count} ${a.people_count === 1 ? 'person' : 'people'}. Entry code: ${a.checkin_code}. Tap "View pass" to open your QR code. It is valid only today and can be scanned only once. Security can also type the entry code.`;
+const PASS_BASE = 'https://meet-gurudev.example/p/';
 const nextId = (t) => { db.seq[t] = (db.seq[t] ?? 0) + 1; return db.seq[t]; };
 function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(db)); } catch { /* the preview still works without storage */ } }
 
@@ -37,7 +42,7 @@ function avatar(name, hue) {
 // ---- Seed data ------------------------------------------------------------------
 
 function seed() {
-  db = { seq: {}, users: [], sessions: [], appointments: [], notifications: [], outbox: [], broadcasts: [], auth: {}, otps: {}, offsetMs: 0 };
+  db = { seq: {}, users: [], sessions: [], appointments: [], notifications: [], outbox: [], auth: {}, otps: {}, offsetMs: 0 };
   const user = (name, phone, role = 'visitor', status = 'active', hue = 210) => {
     const u = { id: nextId('users'), name, phone, photo: avatar(name, hue), role, status, created_at: sqlNow(), reviewed_by: null };
     db.users.push(u);
@@ -65,14 +70,15 @@ function seed() {
   const descs = ['Blessings for the family', "Daughter's wedding next month", 'Invite Gurudev to our school function', 'Rural water project proposal', 'Annual donation', 'Gratitude after recovery'];
   let n = 0;
   const book = (session, u, status, checkedInBy = null) => {
-    const size = 1 + (n % 4);
+    const size = 1 + (n % 5);
     const a = {
       id: nextId('appointments'), user_id: u.id, session_id: session.id, date: session.date, period: session.period,
       name: u.name, phone: u.phone, photo: u.photo, reference: refs[n % refs.length][0], ref_phone: refs[n % refs.length][1], ref_designation: refs[n % refs.length][2], people_count: size, express: 0, created_by: null,
       people: Array.from({ length: size - 1 }, (_, i) => ({ name: `${['Anu', 'Ravi', 'Sita', 'Gopal'][i]} ${u.name.split(' ')[1]}`, phone: `+9199000${String(n * 10 + i).padStart(5, '0')}` })),
       purposes: purposeSets[n % purposeSets.length], description: descs[n % descs.length],
       status, admin_note: null, reviewed_by: status === 'pending' ? null : admin.id,
-      checkin_code: status === 'approved' ? code() : null,
+      checkin_code: status === 'approved' ? code() : null, pass_token: status === 'approved' ? token() : null,
+      checked_in_count: checkedInBy ? Math.max(1, size - (n % 3 === 0 ? 1 : 0)) : null,
       checked_in_at: checkedInBy ? sqlAt(session.date, addMinutes(periods[session.period].start, 10 + (n % 50))) : null,
       checked_in_by: checkedInBy?.id ?? null,
       reminded_day_before: 1, greeted: 1, pass_sent_at: status === 'approved' && session.date <= t ? sqlNow() : null,
@@ -127,8 +133,8 @@ function emit(e) { for (const fn of [...listeners]) { try { fn(e); } catch { lis
 const emitToUser = (userId, event, data = {}) => emit({ type: 'user', userId, event, data });
 const emitToStaff = (kind) => emit({ type: 'staff', event: 'changed', data: { kind } });
 
-function whatsapp(kind, phone, preview) {
-  db.outbox.push({ id: nextId('outbox'), kind, recipient: phone, preview, status: 'logged', error: null, created_at: sqlNow(), sent_at: null });
+function whatsapp(kind, phone, preview, passToken = null) {
+  db.outbox.push({ id: nextId('outbox'), kind, recipient: phone, preview, passToken, status: 'logged', error: null, created_at: sqlNow(), sent_at: null });
   emit({ type: 'outbox' });
 }
 function notify(userId, apptId, title, body, { phone, kind = 'update' } = {}) {
@@ -154,6 +160,7 @@ const view = (a) => ({
   date: a.date, period: a.period, periodLabel: PERIOD_LABELS[a.period], adminNote: a.admin_note,
   reviewedBy: a.reviewed_by ? userById(a.reviewed_by)?.name : null,
   checkedInAt: a.checked_in_at, checkedInBy: a.checked_in_by ? userById(a.checked_in_by)?.name : null,
+  checkedInCount: a.checked_in_at ? (a.checked_in_count ?? a.people_count) : null,
   passSent: Boolean(a.pass_sent_at), createdAt: a.created_at,
 });
 const used = (sessionId) => db.appointments.filter((a) => a.session_id === sessionId && ACTIVE.includes(a.status)).reduce((s, a) => s + a.people_count, 0);
@@ -199,7 +206,7 @@ const routes = [];
 const on = (method, pattern, fn, auth) => routes.push({ method, re: new RegExp(`^${pattern.replace(/:\w+/g, '(\\d+)')}$`), fn, auth });
 
 on('GET', '/api/config', () => ({
-  timeZone: TZ, vapidPublicKey: '', purposes: PURPOSES, maxPeople: 10, contact: CONTACT,
+  timeZone: TZ, vapidPublicKey: '', purposes: PURPOSES, maxPeople: MAX_PEOPLE, contact: CONTACT,
   periods: Object.fromEntries(PERIODS.map((p) => [p, { label: periods[p].label, opensAt: formatClock(periods[p].start) }])),
 }));
 
@@ -262,7 +269,7 @@ on('POST', '/api/appointments', ({ body, user }) => {
   const description = text(body.description, 'a few words about your visit', 500, { required: purposes.includes('other') });
   const passPhone = phone(body.phone ?? user.phone, 'the WhatsApp number for your pass');
   const count = Number(body.peopleCount);
-  if (!Number.isInteger(count) || count < 1 || count > 10) throw new HttpError(400, 'Please choose between 1 and 10 people');
+  if (!Number.isInteger(count) || count < 1 || count > MAX_PEOPLE) throw new HttpError(400, `Please choose between 1 and ${MAX_PEOPLE} people`);
   const extra = Array.isArray(body.people) ? body.people : [];
   if (extra.length !== count - 1) throw new HttpError(400, 'Please add everyone who is coming');
   const people = extra.map((p, i) => ({ name: text(p?.name, `the name of person ${i + 2}`, 80), phone: phone(p?.phone, `a valid phone number for person ${i + 2}`) }));
@@ -278,7 +285,7 @@ on('POST', '/api/appointments', ({ body, user }) => {
     id: nextId('appointments'), user_id: user.id, session_id: s.id, date: s.date, period: s.period, name: user.name, phone: passPhone, photo: user.photo,
     reference, ref_phone: refPhone, ref_designation: refDesignation, express: 0, created_by: null,
     people_count: count, people, purposes, description: description || null, status: 'pending', admin_note: null, reviewed_by: null,
-    checkin_code: null, checked_in_at: null, checked_in_by: null, reminded_day_before: 0, greeted: 0, pass_sent_at: null, created_at: sqlNow(), updated_at: sqlNow(),
+    checkin_code: null, pass_token: null, checked_in_count: null, checked_in_at: null, checked_in_by: null, reminded_day_before: 0, greeted: 0, pass_sent_at: null, created_at: sqlNow(), updated_at: sqlNow(),
   };
   db.appointments.push(a);
   notify(user.id, a.id, 'Request received 🙏', `We have received your request to meet Gurudev on ${formatVisit(a)} for ${count} ${count === 1 ? 'person' : 'people'}. We will send you a confirmation after it is reviewed.`, { phone: passPhone });
@@ -314,7 +321,8 @@ on('GET', '/api/me/appointments/:id/pass', async ({ user, params }) => {
 // ---- Scanner -----------------------------------------------------------------------
 
 const findPass = (body) => {
-  const a = body.code ? db.appointments.find((x) => x.checkin_code === String(body.code).trim()) : db.appointments.find((x) => x.id === Number(body.appointmentId));
+  const c = String(body.code ?? '').trim().toUpperCase();
+  const a = body.code ? db.appointments.find((x) => x.checkin_code && x.checkin_code.toUpperCase() === c) : db.appointments.find((x) => x.id === Number(body.appointmentId));
   if (!a) throw new HttpError(404, 'This QR code is not a valid entry pass. Do not allow entry.');
   return a;
 };
@@ -328,15 +336,28 @@ on('POST', '/api/staff/admit', ({ body, user }) => {
   const a = findPass(body);
   const r = scanResult(a, opts());
   if (!r.canAdmit && !(user.role === 'admin' && r.adminOverride && body.override)) throw new HttpError(409, r.message, { result: r.result });
+  const n = body.count ? Number(body.count) : a.people_count;
+  if (!Number.isInteger(n) || n < 1 || n > a.people_count) throw new HttpError(400, `Choose between 1 and ${a.people_count} people`);
   a.checked_in_at = sqlNow();
   a.checked_in_by = user.id;
+  a.checked_in_count = n;
   notify(a.user_id, a.id, 'Welcome 🙏', `You are checked in for ${formatVisit(a)}. Please take a seat.`, { phone: false });
+  emitToStaff('checkin');
+  return { appointment: view(a) };
+}, 'staff');
+on('POST', '/api/staff/count', ({ body, user }) => {
+  const a = db.appointments.find((x) => x.id === Number(body.appointmentId));
+  if (!a || !a.checked_in_at) throw new HttpError(404, 'This visitor has not checked in');
+  if (user.role !== 'admin' && a.checked_in_by !== user.id) throw new HttpError(403, 'You can only change check-ins you made today');
+  const n = Number(body.count);
+  if (!Number.isInteger(n) || n < 1 || n > a.people_count) throw new HttpError(400, `Choose between 1 and ${a.people_count} people`);
+  a.checked_in_count = n;
   emitToStaff('checkin');
   return { appointment: view(a) };
 }, 'staff');
 on('GET', '/api/staff/recent', ({ user }) => {
   const rows = db.appointments.filter((a) => a.checked_in_by === user.id && a.date === today()).sort((a, b) => b.checked_in_at.localeCompare(a.checked_in_at));
-  return { checkins: rows.map(view), people: rows.reduce((s, a) => s + a.people_count, 0) };
+  return { checkins: rows.map(view), people: rows.reduce((s, a) => s + (a.checked_in_count ?? a.people_count), 0) };
 }, 'staff');
 
 // ---- Admin ---------------------------------------------------------------------------
@@ -347,19 +368,19 @@ on('GET', '/api/admin/dashboard', ({ query }) => {
   const sessions = PERIODS.map((p) => db.sessions.find((s) => s.date === date && s.period === p)).filter(Boolean).map((s) => {
     const appts = db.appointments.filter((a) => a.session_id === s.id && a.status === 'approved');
     const inn = appts.filter((a) => a.checked_in_at);
-    return { period: s.period, label: periods[s.period].label, capacity: s.capacity, bookings: appts.length, people: appts.reduce((n, a) => n + a.people_count, 0), checkedInBookings: inn.length, checkedInPeople: inn.reduce((n, a) => n + a.people_count, 0) };
+    return { period: s.period, label: periods[s.period].label, capacity: s.capacity, bookings: appts.length, people: appts.reduce((n, a) => n + a.people_count, 0), checkedInBookings: inn.length, checkedInPeople: inn.reduce((n, a) => n + (a.checked_in_count ?? a.people_count), 0), waiting: appts.filter((a) => !a.checked_in_at).reduce((n, a) => n + a.people_count, 0) };
   });
   const sum = (k) => sessions.reduce((n, s) => n + s[k], 0);
   const days = [];
   for (let d = addDays(date, -6); d <= addDays(date, 7); d = addDays(d, 1)) {
     const appts = db.appointments.filter((a) => a.date === d && a.status === 'approved');
-    days.push({ date: d, people: appts.reduce((n, a) => n + a.people_count, 0), checkedIn: appts.filter((a) => a.checked_in_at).reduce((n, a) => n + a.people_count, 0) });
+    days.push({ date: d, people: appts.reduce((n, a) => n + a.people_count, 0), checkedIn: appts.filter((a) => a.checked_in_at).reduce((n, a) => n + (a.checked_in_count ?? a.people_count), 0) });
   }
   return {
     date, today: t,
     summary: {
       bookings: sum('bookings'), people: sum('people'), checkedInBookings: sum('checkedInBookings'), checkedInPeople: sum('checkedInPeople'),
-      remainingPeople: sum('people') - sum('checkedInPeople'), capacity: sum('capacity'),
+      remainingPeople: sum('waiting'), capacity: sum('capacity'),
       pending: db.appointments.filter((a) => a.status === 'pending' && a.date >= t).length,
       hold: db.appointments.filter((a) => a.status === 'hold' && a.date >= t).length,
       securityPending: db.users.filter((u) => u.role === 'security' && u.status === 'pending' && isComplete(u)).length,
@@ -388,8 +409,9 @@ on('GET', '/api/admin/appointments', ({ query }) => {
     const ok = day.filter((a) => a.status === 'approved');
     const inn = ok.filter((a) => a.checked_in_at);
     const people = ok.reduce((n, a) => n + a.people_count, 0);
-    const inPeople = inn.reduce((n, a) => n + a.people_count, 0);
-    stats = { approved: ok.length, pending: day.filter((a) => a.status === 'pending').length, hold: day.filter((a) => a.status === 'hold').length, people, checkedIn: inn.length, checkedInPeople: inPeople, remaining: ok.length - inn.length, remainingPeople: people - inPeople };
+    const inPeople = inn.reduce((n, a) => n + (a.checked_in_count ?? a.people_count), 0);
+    const waiting = ok.filter((a) => !a.checked_in_at).reduce((n, a) => n + a.people_count, 0);
+    stats = { approved: ok.length, pending: day.filter((a) => a.status === 'pending').length, hold: day.filter((a) => a.status === 'hold').length, people, checkedIn: inn.length, checkedInPeople: inPeople, remaining: ok.length - inn.length, remainingPeople: waiting };
   }
   return { appointments: rows.map(view), stats };
 }, 'admin');
@@ -407,6 +429,7 @@ for (const [action, status] of [['approve', 'approved'], ['hold', 'hold'], ['rej
     a.reviewed_by = user.id;
     if (status === 'approved') {
       a.checkin_code ??= code();
+      a.pass_token ??= token();
       if (a.date === today() || (a.date === addDays(today(), 1) && clock() >= CONFIG.reminderTime)) a.reminded_day_before = 1;
       if (a.date === today()) a.greeted = 1;
     }
@@ -434,7 +457,7 @@ on('POST', '/api/admin/express', ({ body, user: admin }) => {
   const name = text(body.name, 'their name', 80);
   const p = phone(body.phone, 'their WhatsApp number');
   const count = body.peopleCount ? Number(body.peopleCount) : 1;
-  if (!Number.isInteger(count) || count < 1 || count > 10) throw new HttpError(400, 'Please choose between 1 and 10 people');
+  if (!Number.isInteger(count) || count < 1 || count > MAX_PEOPLE) throw new HttpError(400, `Please choose between 1 and ${MAX_PEOPLE} people`);
   const clash = db.appointments.find((a) => ACTIVE.includes(a.status) && a.date >= today() && [a.phone, ...a.people.map((x) => x.phone)].includes(p));
   if (clash && !body.force) throw new HttpError(409, `${name} already has an appointment on ${formatVisit(clash)}. Create an express pass anyway?`, { conflicts: [formatVisit(clash)] });
   let u = db.users.find((x) => x.phone === p);
@@ -448,31 +471,19 @@ on('POST', '/api/admin/express', ({ body, user: admin }) => {
     reference: text(body.reference, 'reference', 120, { required: false }), ref_phone: body.refPhone ? normalizePhone(body.refPhone) : null,
     ref_designation: text(body.refDesignation, 'designation', 80, { required: false }) || null, people_count: count, people: [],
     purposes: (body.purposes ?? []).filter((x) => x in PURPOSES), description: text(body.description, 'note', 500, { required: false }) || null,
-    status: 'approved', express: 1, created_by: admin.id, admin_note: null, reviewed_by: admin.id, checkin_code: code(), checked_in_at: null, checked_in_by: null,
+    status: 'approved', express: 1, created_by: admin.id, admin_note: null, reviewed_by: admin.id, checkin_code: code(), pass_token: token(), checked_in_count: null, checked_in_at: null, checked_in_by: null,
     reminded_day_before: 1, greeted: 1, pass_sent_at: sqlNow(), created_at: sqlNow(), updated_at: sqlNow(),
   };
   db.appointments.push(a);
-  const msg = `${name}, this is your express pass for today (${formatDay(t)}) for ${count} ${count === 1 ? 'person' : 'people'}. Show it at the entrance. It is valid only today and can be scanned only once.`;
+  const msg = passText(a, `today (${formatDay(t)})`);
   const n = { id: nextId('notifications'), user_id: u.id, appointment_id: a.id, title: 'Your express entry pass 🎟️', body: msg, read_at: null, created_at: sqlNow() };
   db.notifications.push(n);
   emitToUser(u.id, 'notification', n);
-  whatsapp('pass', p, `[QR code image] Your express entry pass 🎟️\n${msg}`);
+  whatsapp('pass', p, `Your express entry pass 🎟️\n${msg}`, a.pass_token);
   emitToStaff('appointment');
   return { appointment: view(a), status: 201 };
 }, 'admin');
 
-on('POST', '/api/admin/broadcast', ({ body, user }) => {
-  const date = DATE_RE.test(body.date ?? '') ? body.date : null;
-  if (!date) throw new HttpError(400, 'Please choose a date');
-  const period = PERIODS.includes(body.period) ? body.period : null;
-  const message = text(body.message, 'the message', 600);
-  const rows = db.appointments.filter((a) => a.date === date && a.status === 'approved' && (!period || a.period === period));
-  if (!rows.length) throw new HttpError(400, 'There are no confirmed visitors for this day.');
-  for (const a of rows) notify(a.user_id, a.id, 'Message from the ashram', message, { phone: a.phone, kind: 'broadcast' });
-  db.broadcasts.push({ id: nextId('broadcasts'), date, period, body: message, recipients: rows.length, sent_by_name: user.name, created_at: sqlNow() });
-  return { recipients: rows.length };
-}, 'admin');
-on('GET', '/api/admin/broadcasts', ({ query }) => ({ broadcasts: db.broadcasts.filter((b) => b.date === (query.date ?? today())).reverse() }), 'admin');
 
 on('GET', '/api/admin/security', ({ query }) => {
   const q = String(query.q ?? '').trim().toLowerCase();
@@ -556,7 +567,7 @@ on('DELETE', '/api/admin/sessions/:id', ({ params }) => {
   db.sessions = db.sessions.filter((s) => s.id !== id);
   return { ok: true };
 }, 'admin');
-on('GET', '/api/admin/outbox', () => ({ messages: [...db.outbox].reverse().slice(0, 100).map((m) => ({ ...m, preview: m.kind === 'otp' ? 'Login code' : m.preview.replace('\n', ': ') })) }), 'admin');
+on('GET', '/api/admin/outbox', () => ({ messages: [...db.outbox].reverse().slice(0, 100).map((m) => ({ ...m, preview: m.kind === 'otp' ? 'Login code' : `${m.preview.replace('\n', ': ')}${m.passToken ? ` ${PASS_BASE}${m.passToken}` : ''}` })) }), 'admin');
 
 // ---- Entry point used by each app frame ----------------------------------------------------
 
@@ -582,6 +593,20 @@ export async function handle(frame, method, url, body) {
 }
 
 export const currentUser = (frame) => publicUser(userById(db.auth[frame]));
+export const passLink = (t) => PASS_BASE + t;
+
+// The page behind a pass link, rendered exactly as the server does.
+export async function renderPass(passToken) {
+  const a = db.appointments.find((x) => x.pass_token === passToken);
+  if (!a) return renderPassPage({ state: 'missing' });
+  const pass = passState(a, opts());
+  return renderPassPage({
+    state: pass.state, name: a.name, visit: formatVisit(a), people: a.people_count, code: a.checkin_code, express: Boolean(a.express),
+    qrSvg: pass.state === 'ready' ? await QRCode.toString(a.checkin_code, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) : '',
+    opensText: pass.state === 'not_yet' ? `${formatDay(a.date)}, ${pass.opensAt}` : '',
+    checkedInTime: a.checked_in_at ? new Date(a.checked_in_at.replace(' ', 'T') + 'Z').toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '',
+  });
+}
 export const outbox = () => [...db.outbox].reverse();
 
 // Passes the scan helper offers in the preview (instead of a camera).
@@ -616,11 +641,13 @@ export function runJobs() {
     if (!a.pass_sent_at && minutesUntil(t, periods[a.period].start, TZ, now()) <= 0) {
       a.pass_sent_at = sqlNow();
       a.greeted = 1;
-      const body = `${a.name}, this is your QR pass for today (${formatDay(t)}, ${PERIOD_LABELS[a.period]}) for ${a.people_count} ${a.people_count === 1 ? 'person' : 'people'}. Show it at the entrance. It is valid only today and can be scanned only once.`;
+      a.checkin_code ??= code();
+      a.pass_token ??= token();
+      const body = passText(a, `today (${formatDay(t)}, ${PERIOD_LABELS[a.period]})`);
       const n = { id: nextId('notifications'), user_id: a.user_id, appointment_id: a.id, title: 'Your entry pass 🎟️', body, read_at: null, created_at: sqlNow() };
       db.notifications.push(n);
       emitToUser(a.user_id, 'notification', n);
-      whatsapp('pass', a.phone, `[QR code image] Your entry pass 🎟️\n${body}`);
+      whatsapp('pass', a.phone, `Your entry pass 🎟️\n${body}`, a.pass_token);
       sent++;
     }
   }

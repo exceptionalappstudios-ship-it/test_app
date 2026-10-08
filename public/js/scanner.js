@@ -1,6 +1,6 @@
 // QR scanner used by security staff (and admins): camera + manual code,
 // with a full-screen green / red result.
-import { $, api, esc, formatDate, formatTime, plural, photoTag, openSheet, busy } from './common.js';
+import { $, $$, api, esc, formatDate, formatTime, plural, photoTag, openSheet, busy } from './common.js';
 import { icons } from './icons.js';
 
 function loadJsQR() {
@@ -43,11 +43,18 @@ export function showScanResult(body, { isAdmin = false } = {}) {
         return;
       }
       const a = r.appointment;
+      let count = a.peopleCount;
       if (r.result === 'ok') {
         vibrate(60);
         el.innerHTML = `<div class="grab"></div>${verdict('ok', icons.checkCircle, a.express ? 'Valid express pass' : 'Valid pass', a.photo && !a.photo.startsWith('data:image/svg') ? 'Check the face matches the photo' : 'No photo on this pass. Please check an ID card.')}${visitorCard(a)}
-          <div class="actions"><button class="btn block" data-admit style="min-height:60px;font-size:1.15rem">${icons.check} Allow entry (${esc(plural(a.peopleCount, 'person', 'people'))})</button></div>
+          ${a.peopleCount > 1 ? `<div class="label center">How many came?</div><div class="count-picker">${Array.from({ length: a.peopleCount }, (_, i) => i + 1).map((n) => `<button type="button" data-count="${n}" class="${n === count ? 'on' : ''}">${n}</button>`).join('')}</div>` : ''}
+          <div class="actions"><button class="btn block" data-admit style="min-height:60px;font-size:1.15rem">${icons.check} <span data-admit-label>Allow entry (${esc(plural(count, 'person', 'people'))})</span></button></div>
           <button class="btn ghost block" data-close>Cancel</button>`;
+        $$('[data-count]', el).forEach((b) => b.addEventListener('click', () => {
+          count = Number(b.dataset.count);
+          $$('[data-count]', el).forEach((x) => x.classList.toggle('on', x === b));
+          $('[data-admit-label]', el).textContent = `Allow entry (${plural(count, 'person', 'people')})`;
+        }));
       } else if (r.result === 'used') {
         vibrate([200, 100, 200]);
         el.innerHTML = `<div class="grab"></div>${verdict('bad', icons.alert, 'ALREADY CHECKED IN', `This QR code was already used${a.checkedInAt ? ` at ${formatTime(a.checkedInAt)}` : ''}${a.checkedInBy ? ` by ${a.checkedInBy}` : ''}. Do not allow entry again.`)}
@@ -62,9 +69,9 @@ export function showScanResult(body, { isAdmin = false } = {}) {
       }
       $('[data-admit]', el)?.addEventListener('click', async (e) => {
         try {
-          const { appointment } = await busy(e.currentTarget, () => api('/api/staff/admit', { method: 'POST', body: { ...body, override: e.currentTarget.hasAttribute('data-override') } }));
+          const { appointment } = await busy(e.currentTarget, () => api('/api/staff/admit', { method: 'POST', body: { ...body, count, override: e.currentTarget.hasAttribute('data-override') } }));
           vibrate(120);
-          el.innerHTML = `<div class="grab"></div>${verdict('ok', icons.checkCircle, 'Entry allowed', `${appointment.name} · ${plural(appointment.peopleCount, 'person', 'people')}`)}
+          el.innerHTML = `<div class="grab"></div>${verdict('ok', icons.checkCircle, 'Entry allowed', `${appointment.name} · ${plural(appointment.checkedInCount ?? appointment.peopleCount, 'person', 'people')}`)}
             <button class="btn block" data-close>Scan next</button>`;
           setTimeout(() => sheet.close(), 2500);
         } catch (err) {
@@ -81,8 +88,8 @@ export async function startScanner(el, { isAdmin = false, onDone } = {}) {
     <div class="scanner"><video playsinline muted></video><div class="frame"></div><div class="msg" data-msg>Starting camera…</div>
       <div class="off-msg">${icons.camera}<span data-off></span></div></div>
     <form class="card" data-manual style="margin-top:14px">
-      <label for="code" style="margin-top:0">Camera not working? Type the code</label>
-      <div class="row"><input id="code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Code from the pass"><button class="btn small" style="min-height:50px">Check</button></div>
+      <label for="code" style="margin-top:0">Camera not working? Type the 6-character code</label>
+      <div class="row"><input id="code" name="code" class="code-input" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="K7M2QX"><button class="btn small" style="min-height:52px;flex:0 0 auto">Check</button></div>
     </form>`;
   const video = $('video', el);
   const msg = $('[data-msg]', el);
@@ -106,7 +113,7 @@ export async function startScanner(el, { isAdmin = false, onDone } = {}) {
   };
   $('[data-manual]', el).addEventListener('submit', (e) => {
     e.preventDefault();
-    const code = e.target.code.value.trim();
+    const code = e.target.code.value.trim().toUpperCase();
     if (code) { e.target.reset(); check(code); }
   });
 

@@ -4,7 +4,7 @@ import { transaction } from '../db.js';
 import { requireUser, requireProfile } from '../auth.js';
 import { HttpError, text, phone as parsePhone, normalizePhone } from '../http.js';
 import {
-  ACTIVE, APPOINTMENT_SELECT, PURPOSES, getAppointment, appointmentView, viewsWithPeople, passState,
+  ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, appointmentView, viewsWithPeople, passState,
 } from '../appointments.js';
 import { nowInTimezone, minutesUntil, addDays, formatVisit, formatClock, PERIODS, DATE_RE } from '../time.js';
 
@@ -22,7 +22,7 @@ export function visitorRoutes({ db, notifier, config, now }) {
       vapidPublicKey: notifier.publicKey,
       periods: Object.fromEntries(PERIODS.map((p) => [p, { label: periods[p].label, opensAt: formatClock(periods[p].start) }])),
       purposes: PURPOSES,
-      maxPeople: 10,
+      maxPeople: MAX_PEOPLE,
       contact: config.contact,
     });
   });
@@ -72,7 +72,7 @@ export function visitorRoutes({ db, notifier, config, now }) {
   function parsePeople(body, user) {
     const passPhone = parsePhone(body.phone ?? user.phone, config.defaultCountryCode, 'the WhatsApp number for your pass');
     const count = Number(body.peopleCount);
-    if (!Number.isInteger(count) || count < 1 || count > 10) throw new HttpError(400, 'Please choose between 1 and 10 people');
+    if (!Number.isInteger(count) || count < 1 || count > MAX_PEOPLE) throw new HttpError(400, `Please choose between 1 and ${MAX_PEOPLE} people`);
     const extra = Array.isArray(body.people) ? body.people : [];
     if (extra.length !== count - 1) throw new HttpError(400, `Please add the name and number of the ${count - 1} other ${count - 1 === 1 ? 'person' : 'people'}`);
     const people = extra.map((p, i) => {

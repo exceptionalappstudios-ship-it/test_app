@@ -1,5 +1,36 @@
 import { nowInTimezone, minutesUntil, formatClock, formatVisit, PERIOD_LABELS } from './time.js';
 
+export const MAX_PEOPLE = 5;
+
+// Entry codes are 6 letters/digits without look-alikes (no 0/O, 1/I/L), so
+// security can type them easily. The QR code contains the same 6 characters.
+const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+// Web Crypto works both on the server and in the browser preview.
+const randomBytes = (n) => globalThis.crypto.getRandomValues(new Uint8Array(n));
+export function newCheckinCode(db) {
+  for (;;) {
+    const code = Array.from(randomBytes(6), (b) => CODE_CHARS[b % CODE_CHARS.length]).join('');
+    if (!db.prepare('SELECT 1 FROM appointments WHERE checkin_code = ?').get(code)) return code;
+  }
+}
+export const normalizeCode = (code) => String(code ?? '').trim().toUpperCase().replace(/[^A-Z0-9_-]/gi, '');
+// The pass link's secret: long and random, separate from the short entry code.
+export const newPassToken = () => btoa(String.fromCharCode(...randomBytes(16))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+// Gives an approved appointment its entry code and pass link if it has none yet.
+export function ensurePass(db, a) {
+  if (a.checkin_code && a.pass_token) return a;
+  const code = a.checkin_code ?? newCheckinCode(db);
+  const token = a.pass_token ?? newPassToken();
+  db.prepare('UPDATE appointments SET checkin_code = ?, pass_token = ? WHERE id = ?').run(code, token, a.id);
+  return { ...a, checkin_code: code, pass_token: token };
+}
+export const peopleIn = (a) => a.checked_in_count ?? a.people_count;
+
+// Text of the WhatsApp pass message (the link goes in the "View pass" button).
+export const passMessage = (a, when) =>
+  `${a.name}, your entry pass for ${when} for ${a.people_count} ${a.people_count === 1 ? 'person' : 'people'}. Entry code: ${a.checkin_code}. Tap "View pass" to open your QR code. It is valid only today and can be scanned only once. Security can also type the entry code.`;
+
 export const ACTIVE = "('pending', 'hold', 'approved')";
 
 export const PURPOSES = {
@@ -37,7 +68,7 @@ export function appointmentView(a, people = []) {
     photo: a.photo ? `/api/photos/${a.photo}` : null,
     reference: a.reference, refPhone: a.ref_phone ?? null, refDesignation: a.ref_designation ?? null,
     express: Boolean(a.express), createdBy: a.created_by_name ?? null,
-    peopleCount: a.people_count, people,
+    peopleCount: a.people_count, people, checkedInCount: a.checked_in_at ? (a.checked_in_count ?? a.people_count) : null,
     purposes: JSON.parse(a.purposes).map((p) => PURPOSES[p] ?? p), description: a.description,
     date: a.date, period: a.period, periodLabel: PERIOD_LABELS[a.period],
     adminNote: a.admin_note, reviewedBy: a.reviewed_by_name ?? null,

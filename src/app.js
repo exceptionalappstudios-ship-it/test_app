@@ -8,7 +8,10 @@ import { createPhotoStore } from './photos.js';
 import { createJobs } from './jobs.js';
 import { sessionMiddleware } from './auth.js';
 import { HttpError } from './http.js';
-import { parsePeriodTimes } from './time.js';
+import { parsePeriodTimes, formatDay, formatVisit } from './time.js';
+import QRCode from 'qrcode';
+import { renderPassPage } from './passPage.js';
+import { passState } from './appointments.js';
 import { authRoutes, photoRoutes } from './routes/auth.js';
 import { visitorRoutes } from './routes/visitor.js';
 import { staffRoutes } from './routes/staff.js';
@@ -64,6 +67,23 @@ export function createApp({ db, config: overrides = {}, now = () => new Date() }
   app.get('/vendor/face-model/:file', (req, res, next) => {
     if (!/^tiny_face_detector_model(-weights_manifest\.json|\.bin)$/.test(req.params.file)) return next();
     vendor(`@vladmandic/face-api/model/${req.params.file}`)(req, res);
+  });
+
+  // The pass link sent on WhatsApp. Works without logging in; the link's
+  // secret part is long and random, and the page is never cached.
+  const byToken = db.prepare(`SELECT a.*, u.name AS checked_in_by_name FROM appointments a LEFT JOIN users u ON u.id = a.checked_in_by WHERE a.pass_token = ?`);
+  app.get('/p/:token', async (req, res) => {
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:" });
+    const a = /^[\w-]{16,40}$/.test(req.params.token) ? byToken.get(req.params.token) : null;
+    if (!a) return res.status(404).send(renderPassPage({ state: 'missing' }));
+    const pass = passState(a, { timeZone: config.timeZone, periods: config.periods, now: now() });
+    res.send(renderPassPage({
+      state: pass.state, name: a.name, visit: formatVisit(a), people: a.people_count, code: a.checkin_code, express: Boolean(a.express),
+      qrSvg: pass.state === 'ready' ? await QRCode.toString(a.checkin_code, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) : '',
+      opensText: pass.state === 'not_yet' ? `${formatDay(a.date)}, ${pass.opensAt}` : '',
+      checkedInTime: a.checked_in_at ? new Date(a.checked_in_at.replace(' ', 'T') + 'Z').toLocaleTimeString('en-IN', { timeZone: config.timeZone, hour: 'numeric', minute: '2-digit' }) : '',
+    }));
   });
 
   app.use('/api', sameOriginOnly, sessionMiddleware(db));

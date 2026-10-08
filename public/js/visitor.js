@@ -199,7 +199,7 @@ function bookDetailsView(ctx, problem = '') {
         <button type="button" data-inc aria-label="More people">${icons.plus}</button>
         <span class="muted small">${draft.count === 1 ? 'Just me' : `You + ${plural(draft.count - 1, 'person', 'people')}`}</span>
       </div>
-      <div class="hint">${maxPeople() < config.maxPeople ? `Only ${maxPeople()} places are left in this session.` : 'Up to 10 people.'}</div>
+      <div class="hint">${maxPeople() < config.maxPeople ? `Only ${maxPeople()} places are left in this session.` : `Up to ${config.maxPeople} people.`}</div>
       <div class="label">Purpose of meeting <span class="muted small">(choose one or more)</span></div>
       <div class="choices">
         ${Object.entries(config.purposes).map(([key, label]) => `
@@ -387,6 +387,8 @@ async function visitView(ctx) {
         passHtml = pass.state === 'ready' ? `<div class="pass">
           <div class="notice ok" style="justify-content:center">${icons.checkCircle}<span>Show this QR code at the entrance</span></div>
           <div class="qr">${pass.svg}</div>
+          <div class="small muted" style="letter-spacing:.08em;font-weight:700">ENTRY CODE</div>
+          <div class="entry-code">${esc(pass.code)}</div>
           <div class="who">${esc(current.name)}</div>
           <div class="muted">${esc(plural(current.peopleCount, 'person', 'people'))} · ${esc(current.periodLabel)}</div>
           <p class="small muted">Valid only today. It can be scanned only once.</p></div>` : '';
