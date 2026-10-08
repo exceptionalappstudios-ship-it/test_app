@@ -33,6 +33,7 @@ export const DEFAULT_CONFIG = {
   photosDir: null,           // null keeps photos in memory (tests)
   showOtpForTesting: false,
   logOutbound: false,
+  trustProxy: 'loopback',
 };
 
 // Rejects state-changing requests coming from other websites.
@@ -54,7 +55,7 @@ export function createApp({ db, config: overrides = {}, now = () => new Date() }
   const ctx = { db, whatsapp, notifier, photos, jobs, config, now };
 
   const app = express();
-  app.set('trust proxy', 'loopback');
+  app.set('trust proxy', config.trustProxy);
   app.locals = Object.assign(app.locals, ctx);
 
   // Compress everything except live event streams.
@@ -68,6 +69,10 @@ export function createApp({ db, config: overrides = {}, now = () => new Date() }
     if (!/^tiny_face_detector_model(-weights_manifest\.json|\.bin)$/.test(req.params.file)) return next();
     vendor(`@vladmandic/face-api/model/${req.params.file}`)(req, res);
   });
+
+  // Used by the hosting platform to check the app is up.
+  const ping = db.prepare('SELECT 1');
+  app.get('/healthz', (_req, res) => { ping.get(); res.type('text').send('ok'); });
 
   // The pass link sent on WhatsApp. Works without logging in; the link's
   // secret part is long and random, and the page is never cached.

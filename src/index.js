@@ -5,8 +5,10 @@ import path from 'node:path';
 
 const env = process.env;
 const port = Number(env.PORT || 3000);
-const appUrl = (env.APP_URL || `http://localhost:${port}`).replace(/\/$/, '');
-const dataDir = env.DATA_DIR || 'data';
+// On Railway the public address and the attached volume are filled in automatically.
+const appUrl = (env.APP_URL || (env.RAILWAY_PUBLIC_DOMAIN ? `https://${env.RAILWAY_PUBLIC_DOMAIN}` : `http://localhost:${port}`)).replace(/\/$/, '');
+const dataDir = env.DATA_DIR || env.RAILWAY_VOLUME_MOUNT_PATH || 'data';
+const onRailway = Boolean(env.RAILWAY_ENVIRONMENT || env.RAILWAY_PROJECT_ID);
 
 const config = {
   timeZone: env.APP_TIMEZONE || 'Asia/Kolkata',
@@ -29,6 +31,8 @@ const config = {
   photosDir: path.join(dataDir, 'photos'),
   showOtpForTesting: env.SHOW_OTP_ON_SCREEN === '1',
   logOutbound: true,
+  // Behind a hosting proxy, trust one hop so rate limits see each visitor's own IP.
+  trustProxy: env.TRUST_PROXY ? (/^\d+$/.test(env.TRUST_PROXY) ? Number(env.TRUST_PROXY) : env.TRUST_PROXY) : (onRailway ? 1 : 'loopback'),
 };
 if (config.sessionTimes === undefined) delete config.sessionTimes;
 
@@ -62,6 +66,10 @@ setInterval(() => {
 }, 30_000);
 jobs.run();
 whatsapp.kick();
+
+if (onRailway && !env.RAILWAY_VOLUME_MOUNT_PATH && !env.DATA_DIR) {
+  console.warn('No Railway volume attached: bookings and photos will be lost on every deploy. Add a volume mounted at /data.');
+}
 
 app.listen(port, () => {
   console.log(`Meet Gurudev is running at ${appUrl}`);
