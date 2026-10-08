@@ -1,0 +1,220 @@
+<title>Meet Gurudev Preview</title>
+<style>
+/* Workbench: three phones side by side (visitor, admin, security) with the
+   preview clock above and the WhatsApp log below; one pane at a time on a phone. */
+:root {
+  --bg: #eaf0f8; --surface: #ffffff; --ink: #0f1f3d; --ink-2: #4a5b78; --line: #dbe3ef;
+  --hero: linear-gradient(140deg, #0a2357 0%, #1446a0 55%, #2f8de4 100%);
+  --green: #12a150; --green-50: #e3f7eb; --blue: #1446a0; --blue-50: #e8f1fd; --frame: #0b1630;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0b1222; --surface: #121c33; --ink: #e9eef8; --ink-2: #a9b6cc; --line: #23304d; --green-50: #12321f; --blue-50: #172a4d; --frame: #000; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #0b1222; --surface: #121c33; --ink: #e9eef8; --ink-2: #a9b6cc; --line: #23304d; --green-50: #12321f; --blue-50: #172a4d; --frame: #000; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font); }
+.top { background: var(--hero); color: #fff; padding-inline: 16px; padding-block: 22px 26px; }
+.top .in { max-width: 1260px; margin: 0 auto; display: grid; gap: 14px; }
+.brand { display: flex; gap: 12px; align-items: center; }
+.brand img { width: 44px; height: 44px; border-radius: 12px; }
+h1 { margin: 0; font-size: 1.55rem; line-height: 1.2; text-wrap: balance; }
+.lead { margin: 0; color: rgba(255,255,255,.85); max-width: 70ch; }
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; counter-reset: s; }
+.steps li { counter-increment: s; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.2); border-radius: 12px; padding: 9px 12px; font-size: .88rem; display: flex; gap: 8px; min-width: 0; }
+.steps li::before { content: counter(s); font-weight: 800; color: #7cf0ad; }
+.wrap { max-width: 1260px; margin: 0 auto; padding-inline: 16px; padding-block: 16px 40px; }
+.clock { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 10px 14px; margin-bottom: 16px; }
+.clock .t { font-weight: 700; font-variant-numeric: tabular-nums; }
+.clock .k { color: var(--ink-2); font-size: .82rem; text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+.clock .grow { flex: 1; min-width: 0; color: var(--ink-2); font-size: .88rem; }
+button { font: inherit; color: inherit; cursor: pointer; }
+.btn { border: 0; border-radius: 10px; padding: 8px 14px; font-weight: 700; font-size: .88rem; background: linear-gradient(135deg, #1fbf63, #0e9447); color: #fff; }
+.btn.light { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn:focus-visible, .tab:focus-visible { outline: 3px solid #8bb8f0; outline-offset: 2px; }
+.tabs { display: none; gap: 6px; margin-bottom: 12px; position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 6px; }
+.tab { flex: 1; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 8px 4px; font-weight: 700; font-size: .85rem; }
+.tab[aria-selected="true"] { background: var(--blue); border-color: var(--blue); color: #fff; }
+.count { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: #e5484d; color: #fff; font-size: .7rem; line-height: 18px; margin-left: 3px; }
+.count[hidden] { display: none; }
+.bench { display: grid; grid-template-columns: repeat(3, minmax(0, 390px)); gap: 20px; justify-content: center; align-items: start; }
+.pane-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 0 4px 8px; }
+.pane-head h2 { font-size: .95rem; margin: 0; }
+.pane-head span { color: var(--ink-2); font-size: .8rem; }
+.phone { background: var(--frame); border-radius: 34px; padding: 9px; box-shadow: 0 14px 40px rgba(10, 35, 87, .22); }
+.phone iframe { display: block; width: 100%; height: 780px; border: 0; border-radius: 26px; background: #eef3fa; }
+.log { grid-column: 1 / -1; }
+.log-card { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+.log-note { padding: 12px 16px; color: var(--ink-2); font-size: .85rem; border-bottom: 1px solid var(--line); }
+.log-list { max-height: 520px; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0; }
+.msg { padding: 12px 16px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); display: grid; gap: 4px; min-width: 0; align-content: start; }
+.msg-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: .78rem; color: var(--ink-2); }
+.pill { font-weight: 800; font-size: .7rem; padding: 2px 8px; border-radius: 999px; background: var(--green-50); color: var(--green); }
+.pill.pass { background: var(--blue-50); color: var(--blue); }
+.msg-body { white-space: pre-wrap; word-break: break-word; font-size: .86rem; }
+.msg-body b { display: block; }
+.msg.fresh { animation: fresh 1.8s ease-out; }
+@keyframes fresh { from { background: var(--green-50); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .msg.fresh { animation: none; } }
+.msg .link { font-size: .74rem; color: var(--ink-2); word-break: break-all; }
+dialog#passView { border: 0; border-radius: 26px; padding: 0; width: min(400px, calc(100vw - 32px)); background: var(--frame); box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+dialog#passView::backdrop { background: rgba(5, 15, 40, .55); }
+dialog#passView iframe { display: block; width: 100%; height: min(720px, calc(100vh - 120px)); border: 0; border-radius: 20px; }
+dialog#passView .bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px 8px 16px; color: #fff; font-size: .85rem; }
+.empty { padding: 26px 16px; color: var(--ink-2); text-align: center; }
+.note { color: var(--ink-2); font-size: .82rem; margin-top: 16px; max-width: 90ch; }
+@media (max-width: 1259px) { .bench { grid-template-columns: repeat(2, minmax(0, 390px)); } }
+@media (max-width: 839px) {
+  .tabs { display: flex; }
+  .bench { grid-template-columns: minmax(0, 1fr); }
+  .pane { display: none; }
+  .pane.on { display: block; }
+  .phone { border-radius: 24px; padding: 6px; }
+  .phone iframe { height: calc(100vh - 150px); min-height: 560px; border-radius: 19px; }
+}
+</style>
+
+<div class="top"><div class="in">
+  <div class="brand"><img src="ICON_URI" alt=""><h1>Meet Gurudev preview</h1></div>
+  <p class="lead">The real visitor, admin and security apps side by side, on sample data. Everything you do stays in your own browser.</p>
+  <ol class="steps" aria-label="Try it">
+    <li>Visitor: log in with any number (the code shows on screen), add your name and a photo, and book.</li>
+    <li>Admin: open Requests and tap Approve.</li>
+    <li>Tap “Skip to next message” to receive the reminder, greeting and pass link (tap “View pass” in the WhatsApp list).</li>
+    <li>Security: tap the visitor's pass, choose how many came, and Allow entry. Tap it again to see the red alert.</li>
+  </ol>
+</div></div>
+
+<div class="wrap">
+  <div class="clock" role="group" aria-label="Preview clock">
+    <span class="k">Preview time</span><span class="t" id="now"></span>
+    <span class="grow" id="nextLabel"></span>
+    <button class="btn" id="skip" type="button">Skip to next message ⏩</button>
+    <button class="btn light" id="back" type="button" hidden>Back to now</button>
+    <button class="btn light" id="reset" type="button">Reset preview</button>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="Preview panes">
+    <button class="tab" role="tab" data-pane="visitor" aria-selected="true">Visitor</button>
+    <button class="tab" role="tab" data-pane="admin" aria-selected="false">Admin</button>
+    <button class="tab" role="tab" data-pane="security" aria-selected="false">Security</button>
+    <button class="tab" role="tab" data-pane="log" aria-selected="false">WhatsApp<span class="count" id="tabCount" hidden></span></button>
+  </div>
+
+  <div class="bench">
+    <section class="pane on" data-pane="visitor">
+      <div class="pane-head"><h2>Visitor's phone</h2><span>Meet Gurudev app</span></div>
+      <div class="phone"><iframe id="visitor" title="Visitor app"></iframe></div>
+    </section>
+    <section class="pane" data-pane="admin">
+      <div class="pane-head"><h2>Admin's phone</h2><span>Seva Admin</span></div>
+      <div class="phone"><iframe id="admin" title="Admin app"></iframe></div>
+    </section>
+    <section class="pane" data-pane="security">
+      <div class="pane-head"><h2>Security's phone</h2><span>Ramesh Kumar</span></div>
+      <div class="phone"><iframe id="security" title="Security app"></iframe></div>
+    </section>
+    <section class="pane log" data-pane="log">
+      <div class="pane-head"><h2>WhatsApp messages sent</h2><span id="logCount"></span></div>
+      <div class="log-card">
+        <div class="log-note">In the live app these go to each person's WhatsApp. Here they are shown instead of sent.</div>
+        <div class="log-list" id="log"></div>
+      </div>
+    </section>
+  </div>
+  <p class="note">The camera scanner, phone notifications and real WhatsApp delivery need the app running on a real server, so here you tap a pass to scan it and messages appear above. Morning, Afternoon and Evening passes open at 8 AM, 1 PM and 4 PM by your device's clock; use “Skip to next message” to move the preview clock forward.</p>
+</div>
+
+<dialog id="passView" aria-label="Pass page">
+  <div class="bar"><span>Pass link, as opened on the visitor's phone</span><form method="dialog"><button class="btn light" type="submit">Close</button></form></div>
+  <iframe id="passFrame" title="Pass page"></iframe>
+</dialog>
+
+<script>/*BACKEND*/</script>
+<script>
+/*APPS*/
+const P = window.__preview;
+P.faceApiSource = FACE_API;
+P.faceModel = FACE_MODEL;
+const frames = { visitor: document.getElementById('visitor'), admin: document.getElementById('admin'), security: document.getElementById('security') };
+const loadFrame = (k) => { frames[k].srcdoc = APPS[k]; };
+const loadAll = () => Object.keys(frames).forEach((k) => loadFrame(k));
+
+function showPane(name) {
+  document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.pane === name)));
+  document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p.dataset.pane === name));
+  if (name === 'log') { unseen = 0; renderLog(); }
+}
+document.querySelector('.tabs').addEventListener('click', (e) => { const t = e.target.closest('[data-pane]'); if (t) showPane(t.dataset.pane); });
+// Links between apps (e.g. "Scan passes" in the admin app) point at the matching phone.
+P.navigate = (from, href) => {
+  const to = href.startsWith('/security') ? 'security' : href.startsWith('/admin') ? 'admin' : 'visitor';
+  showPane(to);
+  frames[to].scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
+
+// ---- WhatsApp log ----
+const logEl = document.getElementById('log');
+let seen = new Set();
+let unseen = 0;
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function renderLog() {
+  const items = P.outbox();
+  const visible = getComputedStyle(document.querySelector('.pane.log')).display !== 'none';
+  if (seen.size && !visible) unseen += items.filter((m) => !seen.has(m.id)).length;
+  logEl.innerHTML = items.length ? items.map((m) => {
+    const time = new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    const [title, ...rest] = m.preview.split('\n');
+    return `<div class="msg ${seen.size && !seen.has(m.id) ? 'fresh' : ''}">
+      <div class="msg-top"><span class="pill ${m.kind === 'pass' ? 'pass' : ''}">${{ otp: 'Login code', pass: 'Pass link', update: 'Update' }[m.kind] ?? 'WhatsApp'}</span><span>to ${esc(m.recipient)}</span><span>· ${esc(time)}</span></div>
+      <div class="msg-body"><b>${esc(title)}</b>${esc(rest.join('\n'))}</div>
+      ${m.passToken ? `<button class="btn" type="button" data-pass="${esc(m.passToken)}" style="justify-self:start;margin-top:4px">View pass ↗</button><span class="link">${esc(P.passLink(m.passToken))}</span>` : ''}</div>`;
+  }).join('') : '<div class="empty">Nothing sent yet. Log in as the visitor and the login code will appear here.</div>';
+  seen = new Set(items.map((m) => m.id));
+  if (!seen.size) seen.add(-1);
+  document.getElementById('logCount').textContent = items.length ? `${items.length} message${items.length === 1 ? '' : 's'}` : '';
+  const badge = document.getElementById('tabCount');
+  badge.hidden = !unseen;
+  badge.textContent = unseen;
+}
+P.changed = () => renderLog();
+
+// "View pass" opens the pass page the way the visitor's phone would show it.
+logEl.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-pass]');
+  if (!b) return;
+  const dialog = document.getElementById('passView');
+  document.getElementById('passFrame').srcdoc = await P.renderPass(b.dataset.pass);
+  dialog.showModal();
+});
+P.subscribe((e) => { if (e.type === 'outbox') renderLog(); });
+
+// ---- Preview clock ----
+function renderClock() {
+  document.getElementById('now').textContent = P.previewNow().toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+  const next = P.nextEvent();
+  document.getElementById('nextLabel').textContent = next
+    ? `Next: ${next.what} on ${next.at.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}`
+    : P.waitingForApproval() ? 'Approve the visitor\'s request in the admin app to see the next messages.' : 'No messages waiting. Book and approve a visit to see them.';
+  document.getElementById('skip').disabled = !next;
+  document.getElementById('back').hidden = !P.timeShifted();
+}
+document.getElementById('skip').addEventListener('click', () => { const next = P.nextEvent(); if (next) P.skipTo(next.at); renderClock(); renderLog(); });
+document.getElementById('back').addEventListener('click', () => { P.backToNow(); renderClock(); });
+P.subscribe((e) => { if (['clock', 'staff', 'reset'].includes(e.type)) renderClock(); });
+
+let armed = false;
+document.getElementById('reset').addEventListener('click', (e) => {
+  if (!armed) { armed = true; e.target.textContent = 'Tap again to reset'; setTimeout(() => { armed = false; e.target.textContent = 'Reset preview'; }, 4000); return; }
+  armed = false;
+  e.target.textContent = 'Reset preview';
+  P.reset();
+  seen = new Set(); unseen = 0;
+  renderLog(); renderClock(); loadAll();
+});
+
+setInterval(() => { P.runJobs(); renderClock(); }, 15000);
+P.runJobs();
+renderLog();
+renderClock();
+loadAll();
+</script>

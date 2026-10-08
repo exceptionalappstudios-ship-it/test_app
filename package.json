@@ -1,0 +1,27 @@
+{
+  "name": "gurudev-appointments",
+  "version": "1.0.0",
+  "description": "Appointment booking platform for visitors coming to meet Gurudev: view slots, request a meeting, admin approval, in-app and push notifications.",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env --watch src/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "build:preview": "node preview/build.mjs"
+  },
+  "dependencies": {
+    "@vladmandic/face-api": "^1.7.15",
+    "compression": "1.8",
+    "express": "^5.2.1",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
+  }
+}

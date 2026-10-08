@@ -1,0 +1,11 @@
+{
+  "name": "Meet Gurudev – Appointments",
+  "short_name": "Meet Gurudev",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#eef3fa",
+  "theme_color": "#0a2357",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
