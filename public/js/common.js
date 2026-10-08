@@ -237,6 +237,25 @@ export function homeFor(user) {
   return '/';
 }
 
+// Shown when someone opens the admin or security app with a number that has no access.
+// Without this they were silently sent to the visitor app and couldn't tell why.
+export function wrongAccount(el, user, pageName) {
+  const roleName = { admin: 'an admin', security: 'security staff', visitor: 'a visitor' }[user.role] || user.role;
+  el.innerHTML = `
+    <div class="card narrow center">
+      <h2>This page is for ${esc(pageName)}</h2>
+      <p class="sub">You are logged in as <b>${esc(formatPhone(user.phone))}</b>, which is registered as ${esc(roleName)}.</p>
+      <div class="actions" style="flex-direction:column">
+        <button class="btn block" type="button" data-switch>${icons.logout} Log out and use another number</button>
+        <a class="btn ghost block" href="${homeFor(user)}">Go to my page</a>
+      </div>
+    </div>`;
+  el.querySelector('[data-switch]').addEventListener('click', async () => {
+    await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    location.replace(location.pathname);
+  });
+}
+
 // ---- Push notifications -------------------------------------------------------------
 
 export async function registerServiceWorker() {

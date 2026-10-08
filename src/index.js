@@ -38,13 +38,16 @@ if (config.sessionTimes === undefined) delete config.sessionTimes;
 
 const db = openDatabase(env.DATABASE_FILE || path.join(dataDir, 'appointments.db'));
 
-// The first admin is set by phone number; they log in with a WhatsApp code.
-if (env.ADMIN_PHONE) {
-  const phone = parsePhone(env.ADMIN_PHONE, config.defaultCountryCode);
+// Admins are set by phone number; they log in with a WhatsApp code.
+// ADMIN_PHONE on the host can add more (numbers separated by commas).
+const ADMIN_PHONES = '9601345289,9913269623';
+for (const raw of `${ADMIN_PHONES},${env.ADMIN_PHONE || ''}`.split(',').map((p) => p.trim()).filter(Boolean)) {
+  let phone;
+  try { phone = parsePhone(raw, config.defaultCountryCode); } catch { console.warn(`Skipping admin number "${raw}": not 10 digits`); continue; }
   const existing = db.prepare('SELECT * FROM users WHERE phone = ?').get(phone);
   if (!existing) {
-    db.prepare("INSERT INTO users (phone, name, role, status) VALUES (?, ?, 'admin', 'active')").run(phone, env.ADMIN_NAME || null);
-    console.log(`Admin account ready for ${phone}. Log in with this number at ${appUrl}`);
+    db.prepare("INSERT INTO users (phone, name, role, status) VALUES (?, NULL, 'admin', 'active')").run(phone);
+    console.log(`Admin account ready for ${phone}. Log in with this number at ${appUrl}/admin.html`);
   } else if (existing.role !== 'admin' || existing.status !== 'active') {
     db.prepare("UPDATE users SET role = 'admin', status = 'active' WHERE id = ?").run(existing.id);
     console.log(`Gave admin access to ${phone}`);

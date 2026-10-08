@@ -1,6 +1,6 @@
 import {
   $, $$, api, esc, formatDate, formatShortDate, formatPhone, formatTime, formatWhen, addDays, plural, statusChip, photoTag,
-  contactButtons, toast, openSheet, confirmSheet, busy, throttle, createRouter, goBack, liveStream, homeFor, PERIOD_ICONS, phoneField, isTenDigits,
+  contactButtons, toast, openSheet, confirmSheet, busy, throttle, createRouter, goBack, liveStream, homeFor, wrongAccount, PERIOD_ICONS, phoneField, isTenDigits,
 } from './common.js';
 import { icons } from './icons.js';
 import { renderLogin, renderProfileSetup } from './login.js';
@@ -630,7 +630,7 @@ async function expressView(ctx) {
 function loginView(ctx) {
   header('Admin', 'Log in with your WhatsApp number.');
   renderLogin(ctx.el, { onDone: (u) => {
-    if (u.role !== 'admin') { location.href = homeFor(u); return; }
+    if (u.role !== 'admin') { header('Admin'); wrongAccount(ctx.el, u, 'admins'); return; }
     setUser(u);
     location.hash = u.profileComplete ? '#/home' : '#/setup';
   } });
@@ -667,7 +667,7 @@ const router = createRouter({
 });
 
 [config, { user }] = await Promise.all([api('/api/config'), api('/api/auth/me')]);
-if (user && user.role !== 'admin') location.replace(homeFor(user));
+if (user && user.role !== 'admin') { header('Admin'); wrongAccount(outlet, user, 'admins'); }
 else {
   setUser(user);
   router.run();

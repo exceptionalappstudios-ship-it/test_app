@@ -48,12 +48,12 @@ Requires Node.js 22.13 or newer.
 
 ```bash
 npm install
-cp .env.example .env      # set ADMIN_PHONE to your WhatsApp number
+cp .env.example .env      # admins: ADMIN_PHONES in src/index.js, or ADMIN_PHONE
 npm start
 ```
 
 Open http://localhost:3000. Without WhatsApp set up, login codes are printed in the terminal (and, with
-`SHOW_OTP_ON_SCREEN=1`, shown on screen). Log in at `/admin.html` with `ADMIN_PHONE`, open **More → Open days and
+`SHOW_OTP_ON_SCREEN=1`, shown on screen). Log in at `/admin.html` with an admin number, open **More → Open days and
 sessions**, then book as a visitor from another browser or a private window.
 
 ## Setting up WhatsApp
@@ -86,7 +86,7 @@ The repo includes `railway.json` (start command, health check at `/healthz`, res
 1. On [railway.com](https://railway.com), sign in with GitHub → **New Project → Deploy from GitHub repo** → pick this repo.
 2. Service **Settings → Source**: choose the branch to deploy.
 3. Right-click the service → **Attach volume**, mount path `/data`. Bookings and photos live here. Without it, they are lost on every deploy.
-4. **Variables**: `ADMIN_PHONE`, `ADMIN_NAME`, the `WHATSAPP_*` values and the optional `CONTACT_*` values.
+4. **Variables**: the `WHATSAPP_*` values and the optional `CONTACT_*` values.
    `APP_URL` and the data folder are picked up from Railway automatically.
 5. **Settings → Networking → Generate Domain** (or add your own domain).
 6. Keep **one replica**: the database is a single file on the volume.

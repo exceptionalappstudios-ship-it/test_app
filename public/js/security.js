@@ -1,4 +1,4 @@
-import { $, api, esc, formatTime, formatPhone, plural, photoTag, openSheet, toast, busy, createRouter, liveStream, homeFor, throttle } from './common.js';
+import { $, api, esc, formatTime, formatPhone, plural, photoTag, openSheet, toast, busy, createRouter, liveStream, homeFor, wrongAccount, throttle } from './common.js';
 import { icons } from './icons.js';
 import { renderLogin, renderProfileSetup } from './login.js';
 import { startScanner } from './scanner.js';
@@ -41,7 +41,7 @@ function loginView(ctx) {
   renderLogin(ctx.el, {
     signupAs: 'security',
     onDone: (u) => {
-      if (u.role === 'visitor') { location.href = '/'; return; }
+      if (u.role === 'visitor') { wrongAccount(ctx.el, u, 'security staff'); return; }
       setUser(u);
       location.hash = u.profileComplete ? '#/scan' : '#/setup';
     },
@@ -119,5 +119,5 @@ const router = createRouter({
 });
 
 ({ user } = await api('/api/auth/me'));
-if (user?.role === 'visitor') location.replace(homeFor(user));
+if (user?.role === 'visitor') { header('Security staff'); wrongAccount(outlet, user, 'security staff'); }
 else { setUser(user); router.run(); }
