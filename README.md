@@ -1,106 +1,107 @@
 # Meet Gurudev – Appointments
 
-A mobile-friendly web app (installable on phones) for booking meetings with Gurudev.
+A simple, fast, mobile-first web app (installable on phones) for visits to meet Gurudev, with three kinds of users:
 
 **Visitors** (`/`)
-1. Create an account (name, mobile/WhatsApp, email, password).
-2. Pick a date and time from the open slots and share the purpose of the meeting.
-3. The request is held as *pending* until the ashram team approves it.
-4. Get updates **in the app, by WhatsApp and by email**: request received, confirmed / declined / cancelled,
-   reminders the day before and an hour before.
-5. **10 minutes before the meeting, an entry QR code appears** in the app (with a notification).
-   Show it at the entrance.
-6. **Contact the team**: message thread in the app, plus call / WhatsApp / email buttons.
+- Log in with their **WhatsApp number and a one-time code**. First time: add name and a **face photo**. The phone finds
+  the face, crops around it and compresses it (~30 KB) so security can recognise them.
+- Book a **day** and **Morning / Afternoon / Evening** (no times shown), then answer: reference (required), how many people
+  (1–10), the WhatsApp number for the pass, purpose (blessings / guidance, invitation, project proposal, donation, life event,
+  other) and a few words about the visit.
+- Add the **name and number of each extra person**. Everyone can have only **one upcoming appointment**. If someone already
+  has one, the app says when, and asks to cancel it or remove the person.
+- Updates **on WhatsApp and in the app**: request received, confirmed, reminder the day before, greeting on the day, and
+  the **QR entry pass** when the session opens (8 AM / 1 PM / 4 PM). The pass works **only that day** and **only once**.
+
+**Security staff** (`/security.html`)
+- Separate sign-up (name, number, face photo). An **admin must approve** them before the scanner opens; access can be removed at any time.
+- One screen: **scan**. A valid pass shows the booker's **photo, name and number of people** with a big green **Allow entry**
+  button. A used pass shows a red **ALREADY CHECKED IN** alert with when and by whom.
 
 **Admins** (`/admin.html`)
-- **Live dashboard**: today's booked / checked-in / yet-to-arrive counts, and a date-wise chart and table of
-  bookings vs check-ins. Updates instantly as people book, get approved and check in.
-- **Scan**: uses the phone camera to read a visitor's QR code, shows who they are, and admits them with one tap.
-  It warns about wrong-day, early or late passes (you can still admit anyway), and refuses cancelled or already-used passes.
-  A code can also be typed in by hand.
-- **Requests**: approve (with an optional note) or decline; cancel approved appointments.
-- **Messages**: reply to visitors' questions.
-- **Manage**: create slots in bulk (date range, days of week, meeting length, breaks), block or delete slots,
-  add or remove admins, change password.
+- **Dashboard**: people checked in vs expected, Morning / Afternoon / Evening progress, a 14-day chart, recent check-ins with
+  the security person who let them in. Updates live.
+- **Requests**: Approve, **Hold** (separate list to decide later) or Decline.
+- **Visitors**: any day's list with search, filters (not arrived / checked in / …), counts, and one-tap **call** and **WhatsApp**.
+  Admins can also check someone in.
+- **Security**: approve, search, call/WhatsApp, remove access.
+- **More**: open days and set places per session, **send a WhatsApp message to everyone visiting on a day** (change of time,
+  venue…), add admins, WhatsApp delivery log, and the scanner.
 
-## Running it
+Everyone uses the same login. After logging in, each person sees the app for their role.
+
+## Try it on your computer
 
 Requires Node.js 22.13 or newer.
 
 ```bash
 npm install
-cp .env.example .env      # then edit .env
+cp .env.example .env      # set ADMIN_PHONE to your WhatsApp number
 npm start
 ```
 
-Open http://localhost:3000 for visitors and http://localhost:3000/admin.html for admins. The first admin
-account is created from `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env`; that admin can add more admins in **Manage**.
+Open http://localhost:3000. Without WhatsApp set up, login codes are printed in the terminal (and, with
+`SHOW_OTP_ON_SCREEN=1`, shown on screen). Log in at `/admin.html` with `ADMIN_PHONE`, open **More → Open days and
+sessions**, then book as a visitor from another browser or a private window.
 
-Without email/WhatsApp settings the app still works: messages that would have been sent are printed in the
-terminal instead.
+## Setting up WhatsApp
 
-## Email
+The app uses Meta's official **WhatsApp Cloud API**. Meta charges a small fee per message (login codes are
+"authentication" messages; updates and passes are "utility" messages).
 
-Fill in the `SMTP_*` settings from any email provider (Gmail with an app password, Zoho, SendGrid, Amazon SES…).
-Emails are sent for every update and for "forgot password" links.
+1. In [Meta for Developers](https://developers.facebook.com/), create an app with WhatsApp, add your business number,
+   and copy the **Phone number ID** and a **permanent access token** into `WHATSAPP_PHONE_NUMBER_ID` and `WHATSAPP_TOKEN`.
+2. In WhatsApp Manager, create these three templates (language English) and wait for approval:
 
-## WhatsApp
+   | Name | Category | Content |
+   | --- | --- | --- |
+   | `login_code` | Authentication | Standard code message with a **Copy code** button |
+   | `appointment_update` | Utility | Body: `{{1}}` new line `{{2}}` |
+   | `entry_pass` | Utility | **Image** header; body: `{{1}}` new line `{{2}}` |
 
-Uses the official **Meta WhatsApp Cloud API**:
+   `{{1}}` is the title (e.g. "Appointment confirmed ✅") and `{{2}}` the message. The QR code is sent as the header image.
+3. Remove `SHOW_OTP_ON_SCREEN` and restart.
 
-1. In [Meta for Developers](https://developers.facebook.com/), create an app with the WhatsApp product and add
-   your business phone number. Copy the **Phone number ID** and create a **permanent access token**.
-2. WhatsApp only allows businesses to message people first using an **approved template**. In WhatsApp Manager,
-   create a *Utility* template named `appointment_update` (language English) with this body:
-
-   ```
-   {{1}}
-   {{2}}
-   ```
-
-   `{{1}}` is the title (e.g. "Appointment confirmed 🙏") and `{{2}}` the message.
-3. Set `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` (and `WHATSAPP_TEMPLATE` if you named it differently).
-
-Phone numbers are stored in international format; numbers typed without a country code get `DEFAULT_COUNTRY_CODE` (91).
+Messages go through a queue that retries failures and survives restarts. **More → WhatsApp delivery** shows what was sent.
 
 ## Going live
 
-- Serve it over **HTTPS** and set `APP_URL` to the https address. The camera scanner and phone notifications
-  only work over HTTPS (or on `localhost`).
-- On iPhone, visitors get phone notifications after adding the app to the Home Screen (Share → *Add to Home Screen*).
-  WhatsApp and email work everywhere.
-- Data is stored in a single SQLite file (`data/appointments.db`). Back it up regularly.
-
-## Settings
-
-All settings live in `.env`. See `.env.example` for the full list with explanations.
+- Host it with **HTTPS** and set `APP_URL`. The camera scanner and phone notifications need HTTPS.
+- Data is stored in `data/` (`appointments.db` and `photos/`). **Back up this folder.**
+- Speed: tested with 1,000 visitors connected and **1,000 check-ins at the same moment**. All succeeded within 1.7 s,
+  with double check-ins refused. Pages use no web fonts or frameworks, responses are compressed, and photos are ~30 KB.
+- Personal data (phone numbers, face photos) is only visible to the person themselves, approved security staff and admins.
 
 ## Interactive preview
 
-`npm run build:preview` builds `preview/dist/preview.html`: a single page that runs the visitor app and the
-admin app side by side against an in-browser copy of the API (`preview/backend.js`), with sample data and a panel
-showing the WhatsApp and email messages that would be sent. Rebuild it after changing the app.
+`npm run build:preview` builds `preview/dist/preview.html`: one page running the visitor, admin and security apps side by
+side on sample data (with a preview clock to skip ahead to reminders and passes). Rebuild after changing the app.
 
 ## Development
 
 ```bash
-npm run dev   # restart on file changes
-npm test      # API tests: accounts, booking, approvals, WhatsApp/email, reminders, QR pass, check-in, dashboard, messages
+npm run dev   # restart on changes
+npm test      # API tests: login codes, roles, booking rules, reminders, QR pass, scanning, dashboard, broadcast
 ```
 
 ```
 src/
-  index.js          entrypoint: reads settings, creates the first admin, runs the reminder job each minute
-  app.js            Express app wiring
-  routes/auth.js    sign up, log in, password reset
-  routes/visitor.js slots, booking, entry pass (QR), notifications, messages
-  routes/admin.js   dashboard stats, requests, check-in, slots, messages, admins
-  notify.js         in-app + live (SSE) + Web Push + email + WhatsApp fan-out
-  channels.js       SMTP email and WhatsApp Cloud API senders
-  jobs.js           reminders and "entry pass ready" notifications
-  db.js             SQLite schema (built-in node:sqlite)
+  index.js            settings, first admin, scheduled messages every 30 s
+  app.js              Express app (compression, static files, routes)
+  routes/auth.js      WhatsApp code login, profile, photos
+  routes/visitor.js   availability, booking rules, my visit, pass
+  routes/staff.js     scanner (security + admins)
+  routes/admin.js     dashboard, requests, visitors, security staff, sessions, broadcast, admins
+  appointments.js     pass and scan rules
+  jobs.js             day-before reminder, greeting, QR pass at session start
+  whatsapp.js         WhatsApp Cloud API with a durable send queue
+  notify.js           in-app, live updates, push
+  db.js               SQLite schema (built-in node:sqlite)
 public/
-  index.html, js/visitor.js   visitor app
-  admin.html, js/admin.js     admin app (js/chart.js dashboard chart)
+  index.html  js/visitor.js     visitor app
+  security.html  js/security.js security app (js/scanner.js)
+  admin.html  js/admin.js       admin app (js/chart.js)
+  js/login.js, js/photo.js      WhatsApp login, face photo
+preview/            interactive preview build
 test/               node:test suite
 ```
