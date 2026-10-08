@@ -11,6 +11,9 @@ let detectorPromise = null;
 function loadDetector() {
   detectorPromise ??= (async () => {
     const faceapi = window.__faceApiLoader ? await window.__faceApiLoader() : await import('/vendor/face-api.js');
+    // Use the phone's graphics chip, or plain JavaScript if it has none
+    // (the WebAssembly version needs extra files we don't ship).
+    if (!(await faceapi.tf.setBackend('webgl').catch(() => false))) await faceapi.tf.setBackend('cpu');
     await faceapi.tf.ready();
     await faceapi.nets.tinyFaceDetector.loadFromUri('/vendor/face-model');
     return faceapi;
@@ -92,7 +95,8 @@ export function photoPicker(el, { current, onChange, prompt = 'Add a clear photo
       <p class="sub" data-msg>${esc(prompt)}</p>
       <div data-status></div>
       <div class="actions" style="margin-top:10px">
-        <label class="btn blue file-btn" style="margin:0">${icons.camera} Take a selfie<input type="file" accept="image/*" capture="user" data-file></label>
+        <button type="button" class="btn blue" style="margin:0" data-selfie>${icons.camera} Take a selfie</button>
+        <input type="file" accept="image/*" capture="user" data-file data-selfie-file hidden>
         <label class="btn light file-btn" style="margin:0">${icons.image} Choose photo<input type="file" accept="image/*" data-file></label>
       </div>
     </div>`;
@@ -123,6 +127,61 @@ export function photoPicker(el, { current, onChange, prompt = 'Add a clear photo
       onChange(null);
     }
   }
+  // The selfie uses the camera inside the page, because laptops and some in-app
+  // browsers (e.g. links opened from WhatsApp) ignore the file input's camera hint.
+  const actions = $('.actions', el);
+  let stream = null;
+  const stopCamera = () => { stream?.getTracks().forEach((t) => t.stop()); stream = null; };
+  window.addEventListener('hashchange', stopCamera);
+  window.addEventListener('pagehide', stopCamera);
+
+  function closeCamera(html) {
+    stopCamera();
+    preview.classList.remove('live');
+    preview.innerHTML = html;
+    actions.hidden = false;
+    $('[data-cam]', el)?.remove();
+  }
+
+  async function openCamera() {
+    if (!navigator.mediaDevices?.getUserMedia) { $('[data-selfie-file]', el).click(); return; }
+    const before = preview.innerHTML;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false });
+    } catch (err) {
+      const blocked = err?.name === 'NotAllowedError' || err?.name === 'SecurityError';
+      status.innerHTML = `<div class="notice warn">${icons.alert}<span>${blocked
+        ? 'Camera permission is blocked. Allow the camera for this site in your browser settings, or tap “Choose photo”.'
+        : 'Could not open the camera. Tap “Choose photo” to use a photo instead.'}</span></div>`;
+      return;
+    }
+    status.innerHTML = '';
+    preview.classList.add('live');
+    preview.innerHTML = '<video autoplay playsinline muted></video>';
+    const video = $('video', preview);
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+    actions.hidden = true;
+    actions.insertAdjacentHTML('afterend', `<div class="actions" data-cam style="margin-top:10px">
+      <button type="button" class="btn blue" style="margin:0" data-snap>${icons.camera} Capture</button>
+      <button type="button" class="btn light" style="margin:0" data-cancel>Cancel</button></div>`);
+    $('[data-cancel]', el).addEventListener('click', () => closeCamera(before));
+    $('[data-snap]', el).addEventListener('click', () => {
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      if (!w || !h) return;
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const g = canvas.getContext('2d');
+      g.translate(w, 0); // save it the way the person saw it (mirror image)
+      g.scale(-1, 1);
+      g.drawImage(video, 0, 0, w, h);
+      canvas.toBlob((blob) => { closeCamera(before); handle(blob); }, 'image/jpeg', 0.92);
+    });
+  }
+  $('[data-selfie]', el).addEventListener('click', openCamera);
+
   el.addEventListener('change', (e) => {
     if (e.target.matches('[data-file]')) { handle(e.target.files[0]); e.target.value = ''; }
   });

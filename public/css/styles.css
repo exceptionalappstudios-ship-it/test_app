@@ -1,5 +1,6 @@
 /* Meet Gurudev: deep-blue gradient header, green actions, white cards.
    System fonts only, so nothing extra downloads on slow networks. */
+[hidden] { display: none !important; }
 :root {
   color-scheme: light;
   --bg: #eef3fa;
@@ -295,6 +296,8 @@ body.no-nav .toast { bottom: calc(20px + var(--safe-b)); }
 .photo-pick .preview { width: 168px; height: 168px; border-radius: 50%; margin: 6px auto 14px; background: var(--blue-50); display: grid; place-items: center; overflow: hidden; border: 4px solid #fff; box-shadow: var(--shadow); color: var(--blue-700); }
 .photo-pick .preview img { width: 100%; height: 100%; object-fit: cover; }
 .photo-pick .preview svg { width: 64px; height: 64px; }
+.photo-pick .preview.live { width: 240px; height: 240px; }
+.photo-pick .preview video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 .file-btn { position: relative; overflow: hidden; }
 .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; font-size: 0; }
 
