@@ -1,36 +1,44 @@
 import express from 'express';
-import {
-  createUser, publicUser, startSession, endSession, verifyPassword, validatePassword,
-  hashPassword, hashToken, newToken, requireUser,
-} from '../auth.js';
-import { HttpError, text, email as parseEmail, phone as parsePhone, rateLimiter } from '../http.js';
+import { issueOtp, checkOtp, publicUser, startSession, endSession, requireUser } from '../auth.js';
+import { HttpError, text, phone as parsePhone, rateLimiter } from '../http.js';
 
-export function authRoutes({ db, notifier, config }) {
+export function authRoutes({ db, whatsapp, notifier, config, photos }) {
   const router = express.Router();
-  const loginLimit = rateLimiter({ max: 10, windowMs: 15 * 60_000 });
-  const resetLimit = rateLimiter({ max: 5, windowMs: 60 * 60_000 });
-  const session = (res, user) => startSession(db, res, user, config);
+  const perPhone = rateLimiter({ max: 5, windowMs: 60 * 60_000, message: 'Too many codes requested for this number. Please try again in an hour.' });
+  const perIp = rateLimiter({ max: 30, windowMs: 60 * 60_000 });
+  const verifyLimit = rateLimiter({ max: 20, windowMs: 15 * 60_000 });
+  const findByPhone = db.prepare('SELECT * FROM users WHERE phone = ?');
 
-  router.post('/signup', (req, res) => {
-    const body = req.body ?? {};
-    const user = createUser(db, {
-      name: text(body.name, 'Name', 100),
-      email: parseEmail(body.email),
-      phone: parsePhone(body.phone, config.defaultCountryCode),
-      password: validatePassword(body.password),
+  // Step 1: send a 6-digit code to the WhatsApp number.
+  router.post('/otp/request', (req, res) => {
+    const phone = parsePhone(req.body?.phone, config.defaultCountryCode);
+    perIp(req.ip);
+    perPhone(phone);
+    const code = issueOtp(db, phone);
+    whatsapp.sendOtp(phone, code);
+    const user = findByPhone.get(phone);
+    res.json({
+      phone,
+      isNew: !user,
+      // Only for trying the app locally without WhatsApp set up.
+      ...(config.showOtpForTesting && !whatsapp.configured ? { testCode: code } : {}),
     });
-    session(res, user);
-    res.status(201).json({ user: publicUser(user) });
   });
 
-  router.post('/login', (req, res) => {
-    const email = String(req.body?.email ?? '').trim().toLowerCase();
-    loginLimit(`${req.ip}|${email}`);
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-    if (!user || !verifyPassword(String(req.body?.password ?? ''), user.password_hash)) {
-      throw new HttpError(401, 'Incorrect email or password');
+  // Step 2: check the code. New numbers get an account here; `signupAs`
+  // decides whether it's a visitor or a security staff account.
+  router.post('/otp/verify', (req, res) => {
+    const phone = parsePhone(req.body?.phone, config.defaultCountryCode);
+    verifyLimit(`${req.ip}|${phone}`);
+    checkOtp(db, phone, req.body?.code);
+    let user = findByPhone.get(phone);
+    if (!user) {
+      const security = req.body?.signupAs === 'security';
+      user = db.prepare('INSERT INTO users (phone, role, status) VALUES (?, ?, ?) RETURNING *')
+        .get(phone, security ? 'security' : 'visitor', security ? 'pending' : 'active');
+      if (security) notifier.emitToStaff('security');
     }
-    session(res, user);
+    startSession(db, res, user, config);
     res.json({ user: publicUser(user) });
   });
 
@@ -42,50 +50,39 @@ export function authRoutes({ db, notifier, config }) {
   router.get('/me', (req, res) => res.json({ user: publicUser(req.user) }));
 
   router.patch('/me', requireUser, (req, res) => {
-    const name = text(req.body?.name, 'Name', 100);
-    const phone = parsePhone(req.body?.phone, config.defaultCountryCode);
-    db.prepare('UPDATE users SET name = ?, phone = ? WHERE id = ?').run(name, phone, req.user.id);
-    res.json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) });
-  });
-
-  router.post('/change-password', requireUser, (req, res) => {
-    if (!verifyPassword(String(req.body?.currentPassword ?? ''), req.user.password_hash)) {
-      throw new HttpError(400, 'Current password is incorrect');
-    }
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(validatePassword(req.body?.newPassword)), req.user.id);
-    res.json({ ok: true });
-  });
-
-  // Always answers the same way so it can't be used to discover accounts.
-  router.post('/forgot', (req, res) => {
-    resetLimit(req.ip);
-    const email = String(req.body?.email ?? '').trim().toLowerCase();
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-    if (user) {
-      const token = newToken();
-      db.prepare("INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, datetime('now', '+1 hour'))")
-        .run(hashToken(token), user.id);
-      const link = `${config.appUrl}/${user.role === 'admin' ? 'admin.html' : ''}#/reset/${token}`;
-      notifier.sendEmail(user.email, 'Reset your password',
-        `Hello ${user.name},\n\nUse this link within 1 hour to set a new password:\n${link}\n\nIf you didn't ask for this, you can ignore this email.`);
-    }
-    res.json({ ok: true });
-  });
-
-  router.post('/reset', (req, res) => {
-    resetLimit(req.ip);
-    const password = validatePassword(req.body?.password);
-    const reset = db.prepare(`
-      SELECT * FROM password_resets WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now')
-    `).get(hashToken(String(req.body?.token ?? '')));
-    if (!reset) throw new HttpError(400, 'This reset link is invalid or has expired. Please request a new one.');
-    db.prepare("UPDATE password_resets SET used_at = datetime('now') WHERE token_hash = ?").run(reset.token_hash);
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), reset.user_id);
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(reset.user_id);
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(reset.user_id);
-    session(res, user);
+    const name = text(req.body?.name, 'your full name', 80);
+    if (name.length < 2) throw new HttpError(400, 'Please enter your full name');
+    const user = db.prepare('UPDATE users SET name = ? WHERE id = ? RETURNING *').get(name, req.user.id);
+    if (user.role === 'security') notifier.emitToStaff('security');
     res.json({ user: publicUser(user) });
   });
 
+  // The browser sends a small JPEG it has already cropped to the face.
+  router.post('/me/photo', requireUser, express.raw({ type: ['image/jpeg', 'application/octet-stream'], limit: '450kb' }), (req, res) => {
+    const name = photos.save(req.body);
+    const user = db.prepare('UPDATE users SET photo = ? WHERE id = ? RETURNING *').get(name, req.user.id);
+    if (user.role === 'security') notifier.emitToStaff('security');
+    res.json({ user: publicUser(user) });
+  });
+
+  return router;
+}
+
+// Photos are only shown to their owner and to staff.
+export function photoRoutes({ db, photos }) {
+  const router = express.Router();
+  const ownsPhoto = db.prepare(`
+    SELECT 1 FROM users WHERE id = ? AND photo = ?
+    UNION SELECT 1 FROM appointments WHERE user_id = ? AND photo = ?
+  `);
+  router.get('/:name', (req, res) => {
+    const u = req.user;
+    if (!u) throw new HttpError(401, 'Please log in to continue');
+    const staff = u.role === 'admin' || (u.role === 'security' && u.status === 'active');
+    if (!staff && !ownsPhoto.get(u.id, req.params.name, u.id, req.params.name)) throw new HttpError(404, 'Not found');
+    const data = photos.read(req.params.name);
+    if (!data) throw new HttpError(404, 'Not found');
+    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable' }).send(data);
+  });
   return router;
 }

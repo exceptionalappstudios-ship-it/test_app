@@ -9,13 +9,13 @@ self.addEventListener('push', (event) => {
     body: data.body,
     icon: '/icon.svg',
     badge: '/icon.svg',
-    data: { url: data.url || '/#/appointments' },
+    data: { url: data.url || '/#/visit' },
   }));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = new URL(event.notification.data?.url || '/#/appointments', self.location.origin).href;
+  const url = new URL(event.notification.data?.url || '/#/visit', self.location.origin).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const existing = windows.find((w) => new URL(w.url).pathname === '/');

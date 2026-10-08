@@ -2,298 +2,397 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDatabase } from '../src/db.js';
 import { createApp } from '../src/app.js';
-import { createUser } from '../src/auth.js';
-import { sendDueReminders } from '../src/jobs.js';
 
-// Clock starts at 2030-01-10 09:00 in Kolkata (UTC+5:30), a Thursday.
+// Clock starts Thursday 2030-01-10, 09:00 in Kolkata (03:30 UTC).
 let clock;
 let server;
 let base;
 let db;
 let app;
-const waRequests = [];
+let sent; // WhatsApp API requests
 
-const config = {
-  timeZone: 'Asia/Kolkata',
-  whatsapp: { token: 't', phoneNumberId: '123', template: 'appointment_update', language: 'en' },
-  fetch: async (url, opts) => { waRequests.push({ url, body: JSON.parse(opts.body) }); return { ok: true }; },
-};
+const at = (iso) => { clock = new Date(iso); };
+const IST = (date, time) => new Date(new Date(`${date}T${time}:00Z`).getTime() - 330 * 60000).toISOString();
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(3000, 7)]);
 
 beforeEach(async () => {
-  clock = new Date('2030-01-10T03:30:00Z');
-  waRequests.length = 0;
+  at(IST('2030-01-10', '09:00'));
+  sent = [];
   db = openDatabase(':memory:');
-  createUser(db, { name: 'Seva Admin', email: 'admin@ashram.org', phone: '+919000000000', password: 'adminpass1', role: 'admin' });
-  app = createApp({ db, config, now: () => clock });
+  db.prepare("INSERT INTO users (phone, name, photo, role) VALUES ('+919000000001', 'Seva Admin', NULL, 'admin')").run();
+  app = createApp({
+    db, now: () => clock,
+    config: {
+      whatsapp: { token: 't', phoneNumberId: '42', otpTemplate: 'login_code', template: 'appointment_update', passTemplate: 'entry_pass', language: 'en' },
+      fetch: async (url, opts) => {
+        const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : 'multipart';
+        sent.push({ url, body });
+        return { ok: true, json: async () => ({ id: url.endsWith('/media') ? 'media-1' : 'msg-1' }) };
+      },
+    },
+  });
   server = app.listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });
 
-afterEach(() => {
-  server.closeAllConnections();
-  server.close();
-});
+afterEach(() => { server.closeAllConnections(); server.close(); });
 
-const at = (iso) => { clock = new Date(iso); };
+const flush = () => app.locals.whatsapp.kick();
+const messagesTo = (phone) => sent.filter((s) => s.body?.to === phone.replace('+', ''));
+const templateText = (s) => s.body.template.components.find((c) => c.type === 'body').parameters.map((p) => p.text).join(' | ');
 
 // A tiny browser: keeps the session cookie between requests.
 function client() {
   let cookie = '';
-  return async (path, { method = 'GET', body, headers = {} } = {}) => {
+  const call = async (path, { method = 'GET', body, headers = {}, raw } = {}) => {
     const res = await fetch(base + path, {
       method,
-      headers: { 'Content-Type': 'application/json', ...(cookie && { Cookie: cookie }), ...headers },
-      body: body && JSON.stringify(body),
+      headers: { ...(raw ? { 'Content-Type': 'image/jpeg' } : { 'Content-Type': 'application/json' }), ...(cookie && { Cookie: cookie }), ...headers },
+      body: raw ?? (body && JSON.stringify(body)),
     });
     const set = res.headers.get('set-cookie');
     if (set) cookie = set.split(';')[0];
-    return { status: res.status, body: await res.json() };
+    const type = res.headers.get('content-type') ?? '';
+    return { status: res.status, body: type.includes('json') ? await res.json() : await res.arrayBuffer() };
   };
+  return call;
 }
 
-async function admin() {
+async function login(phone, { signupAs, name, photo = true } = {}) {
   const c = client();
-  assert.equal((await c('/api/auth/login', { method: 'POST', body: { email: 'admin@ashram.org', password: 'adminpass1' } })).status, 200);
+  const req = await c('/api/auth/otp/request', { method: 'POST', body: { phone } });
+  assert.equal(req.status, 200, JSON.stringify(req.body));
+  await flush();
+  const otp = sent.filter((s) => s.body?.template?.name === 'login_code' && s.body.to === req.body.phone.slice(1)).at(-1);
+  const code = otp.body.template.components[0].parameters[0].text;
+  const res = await c('/api/auth/otp/verify', { method: 'POST', body: { phone, code, signupAs } });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  if (name) await c('/api/auth/me', { method: 'PATCH', body: { name } });
+  if (photo) await c('/api/auth/me/photo', { method: 'POST', raw: JPEG });
   return c;
 }
 
-async function visitor(overrides = {}) {
-  const c = client();
-  const res = await c('/api/auth/signup', {
-    method: 'POST',
-    body: { name: 'Asha Rao', email: `asha${Math.random()}@example.com`, phone: '98765 43210', password: 'password1', ...overrides },
-  });
-  assert.equal(res.status, 201, JSON.stringify(res.body));
-  return c;
+const admin = () => login('+919000000001');
+const visitor = (phone = '9876543210', name = 'Asha Rao') => login(phone, { name });
+
+async function openSessions(a, body = {}) {
+  return a('/api/admin/sessions', { method: 'POST', body: { fromDate: '2030-01-10', toDate: '2030-01-12', periods: ['morning', 'afternoon', 'evening'], capacity: 20, ...body } });
 }
+const sessionId = async (date, period) => (await client()('/api/availability')).body.days.find((d) => d.date === date)?.sessions.find((s) => s.period === period)?.id;
 
-async function makeSlots(a, body = { fromDate: '2030-01-11', startTime: '10:00', endTime: '10:30', duration: 15 }) {
-  return a('/api/admin/slots', { method: 'POST', body });
-}
-
-const outbox = (channel) => db.prepare('SELECT * FROM outbound_messages WHERE channel = ? ORDER BY id').all(channel);
-
-test('signup normalises the phone for WhatsApp and rejects duplicates and weak passwords', async () => {
-  const c = client();
-  const res = await c('/api/auth/signup', { method: 'POST', body: { name: 'Asha', email: 'Asha@Example.com', phone: '098765 43210', password: 'password1' } });
-  assert.equal(res.status, 201);
-  assert.deepEqual([res.body.user.email, res.body.user.phone, res.body.user.role], ['asha@example.com', '+919876543210', 'visitor']);
-  assert.equal((await c('/api/auth/me')).body.user.name, 'Asha');
-
-  const dup = await client()('/api/auth/signup', { method: 'POST', body: { name: 'X', email: 'asha@example.com', phone: '9876543210', password: 'password1' } });
-  assert.equal(dup.status, 409);
-  const weak = await client()('/api/auth/signup', { method: 'POST', body: { name: 'X', email: 'x@example.com', phone: '9876543210', password: 'short' } });
-  assert.equal(weak.status, 400);
+const booking = (sessionIdValue, extra = {}) => ({
+  sessionId: sessionIdValue, reference: 'Swami Ji, Bengaluru centre', peopleCount: 1, people: [],
+  purposes: ['blessings'], description: 'Blessings for my family', ...extra,
 });
 
-test('login, logout and role checks', async () => {
+// ---------------------------------------------------------------------------------
+
+test('logging in with a WhatsApp code creates an account that must add name and photo', async () => {
   const c = client();
-  assert.equal((await c('/api/auth/login', { method: 'POST', body: { email: 'admin@ashram.org', password: 'wrong' } })).status, 401);
-  const v = await visitor();
-  assert.equal((await v('/api/admin/stats')).status, 403);
-  assert.equal((await client()('/api/me')).status, 401);
+  const req = await c('/api/auth/otp/request', { method: 'POST', body: { phone: '098765 43210' } });
+  assert.deepEqual([req.body.phone, req.body.isNew, req.body.testCode], ['+919876543210', true, undefined]);
+  await flush();
+  const otp = sent.at(-1).body;
+  assert.equal(otp.to, '919876543210');
+  assert.equal(otp.template.name, 'login_code');
+  const code = otp.template.components[0].parameters[0].text;
+  assert.match(code, /^\d{6}$/);
+  // The code never appears in the admin-readable log.
+  assert.equal(db.prepare("SELECT preview, payload FROM outbound_messages WHERE kind = 'otp'").get().payload, '{}');
+
+  assert.equal((await c('/api/auth/otp/request', { method: 'POST', body: { phone: '9876543210' } })).status, 429); // 30s cooldown
+  assert.equal((await c('/api/auth/otp/verify', { method: 'POST', body: { phone: '9876543210', code: '000000' } })).status, 400);
+  const ok = await c('/api/auth/otp/verify', { method: 'POST', body: { phone: '9876543210', code } });
+  assert.deepEqual([ok.body.user.role, ok.body.user.profileComplete], ['visitor', false]);
+  assert.equal((await c('/api/auth/otp/verify', { method: 'POST', body: { phone: '9876543210', code } })).status, 400); // single use
+
+  assert.equal((await c('/api/appointments', { method: 'POST', body: booking(1) })).status, 403);
+  await c('/api/auth/me', { method: 'PATCH', body: { name: 'Asha Rao' } });
+  assert.equal((await c('/api/auth/me/photo', { method: 'POST', raw: Buffer.from('not a jpeg'.repeat(200)) })).status, 400);
+  const photo = await c('/api/auth/me/photo', { method: 'POST', raw: JPEG });
+  assert.equal(photo.body.user.profileComplete, true);
+  assert.equal((await c(photo.body.user.photo)).status, 200);
+});
+
+test('wrong codes are limited', async () => {
+  const c = client();
+  await c('/api/auth/otp/request', { method: 'POST', body: { phone: '9876543210' } });
+  for (let i = 0; i < 5; i++) await c('/api/auth/otp/verify', { method: 'POST', body: { phone: '9876543210', code: '111111' } });
+  const res = await c('/api/auth/otp/verify', { method: 'POST', body: { phone: '9876543210', code: '111111' } });
+  assert.equal(res.status, 429);
+});
+
+test('security staff sign up, wait for approval, and can be revoked', async () => {
+  const s = await login('9811111111', { signupAs: 'security', name: 'Ramesh Guard' });
+  assert.deepEqual([(await s('/api/auth/me')).body.user.role, (await s('/api/auth/me')).body.user.status], ['security', 'pending']);
+  assert.equal((await s('/api/staff/scan', { method: 'POST', body: { code: 'x' } })).status, 403);
+  assert.equal((await s('/api/admin/dashboard')).status, 403);
+
   const a = await admin();
-  assert.equal((await a('/api/admin/stats')).status, 200);
-  await a('/api/auth/logout', { method: 'POST' });
-  assert.equal((await a('/api/admin/stats')).status, 401);
+  assert.equal((await a('/api/admin/dashboard')).body.summary.securityPending, 1);
+  const list = (await a('/api/admin/security?q=ramesh')).body.staff;
+  assert.equal(list.length, 1);
+  assert.equal((await a('/api/admin/security?q=98111')).body.staff.length, 1);
+  await a(`/api/admin/security/${list[0].id}/approve`, { method: 'POST' });
+  assert.equal((await s('/api/staff/scan', { method: 'POST', body: { code: 'nope' } })).status, 404);
+  await a(`/api/admin/security/${list[0].id}/revoke`, { method: 'POST' });
+  assert.equal((await s('/api/staff/scan', { method: 'POST', body: { code: 'nope' } })).status, 403);
+  // Logging in again keeps the existing role; signupAs only applies to new numbers.
+  const again = await login('9811111111', { signupAs: 'visitor' });
+  assert.equal((await again('/api/auth/me')).body.user.role, 'security');
+});
+
+test('availability shows sessions without times and hides ended or full ones', async () => {
+  const a = await admin();
+  assert.deepEqual((await openSessions(a)).body, { created: 9, skipped: 0 });
+  at(IST('2030-01-10', '14:00')); // morning has ended today
+  const { days } = (await client()('/api/availability')).body;
+  assert.deepEqual(days[0].sessions.map((s) => s.label), ['Afternoon', 'Evening']);
+  assert.equal(days[0].sessions[0].start, undefined);
+  assert.equal(days.length, 3);
+  const sid = days[0].sessions[0].id;
+  await a(`/api/admin/sessions/${sid}`, { method: 'PATCH', body: { closed: true } });
+  assert.deepEqual((await client()('/api/availability')).body.days[0].sessions.map((s) => s.label), ['Evening']);
+});
+
+test('booking asks for reference, people, purposes and checks everyone has only one appointment', async () => {
+  const a = await admin();
+  await openSessions(a);
+  const sid = await sessionId('2030-01-11', 'morning');
+  const v = await visitor();
+
+  const bad = async (extra, pattern) => {
+    const res = await v('/api/appointments', { method: 'POST', body: booking(sid, extra) });
+    assert.equal(res.status, 400, JSON.stringify(res.body));
+    assert.match(res.body.error, pattern);
+  };
+  await bad({ reference: '' }, /reference/);
+  await bad({ purposes: [] }, /purpose/);
+  await bad({ purposes: ['other'], description: '' }, /few words/);
+  await bad({ peopleCount: 11 }, /between 1 and 10/);
+  await bad({ peopleCount: 2, people: [] }, /1 other person/);
+  await bad({ peopleCount: 2, people: [{ name: 'Me Again', phone: '9876543210' }] }, /same as you/);
+
+  // Ravi books first, so he can't also be in Asha's group.
+  const ravi = await visitor('9999988888', 'Ravi Kumar');
+  assert.equal((await ravi('/api/appointments', { method: 'POST', body: booking(sid) })).status, 201);
+  const check = await v('/api/appointments/check', { method: 'POST', body: { phones: ['99999 88888', '9000012345'] } });
+  assert.equal(check.body.conflicts.length, 1);
+  assert.match(check.body.conflicts[0].message, /Ravi Kumar \(\+919999988888\) already has an appointment on Friday, 11 January \(Morning\)/);
+  const blocked = await v('/api/appointments', { method: 'POST', body: booking(sid, { peopleCount: 2, people: [{ name: 'Ravi', phone: '9999988888' }] }) });
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.body.conflicts[0].phone, '+919999988888');
+
+  const ok = await v('/api/appointments', {
+    method: 'POST',
+    body: booking(sid, { peopleCount: 3, phone: '+91 98765 00000', people: [{ name: 'Meera Rao', phone: '9123456780' }, { name: 'Kiran Rao', phone: '9123456781' }], purposes: ['blessings', 'life_event'] }),
+  });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  const appt = ok.body.appointment;
+  assert.deepEqual([appt.peopleCount, appt.people.length, appt.phone, appt.periodLabel], [3, 2, '+919876500000', 'Morning']);
+  assert.deepEqual(appt.purposes, ['Need blessings / Guidance', 'Life event (Marriage, Anniversary, Birthday, etc.)']);
+  assert.ok(appt.photo);
+  await flush();
+  assert.match(templateText(messagesTo('+919876500000').at(-1)), /Request received/);
+
+  // One appointment at a time, and group members are blocked too.
+  assert.equal((await v('/api/appointments', { method: 'POST', body: booking(sid) })).status, 409);
+  const meera = await visitor('9123456780', 'Meera Rao');
+  const res = await meera('/api/appointments', { method: 'POST', body: booking(sid) });
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /You already have an appointment in Asha Rao's group/);
+  // After cancelling, the numbers are free again.
+  await v(`/api/me/appointments/${appt.id}/cancel`, { method: 'POST' });
+  assert.equal((await meera('/api/appointments', { method: 'POST', body: booking(sid) })).status, 201);
+});
+
+test('sessions fill up by number of people', async () => {
+  const a = await admin();
+  await openSessions(a, { capacity: 4 });
+  const sid = await sessionId('2030-01-11', 'evening');
+  const v1 = await visitor('9800000001', 'One');
+  const group = (n) => booking(sid, { peopleCount: n, people: Array.from({ length: n - 1 }, (_, i) => ({ name: `P${i}`, phone: `97000000${String(i).padStart(2, '0')}` })) });
+  assert.equal((await v1('/api/appointments', { method: 'POST', body: group(3) })).status, 201);
+  const v2 = await visitor('9800000002', 'Two');
+  const res = await v2('/api/appointments', { method: 'POST', body: booking(sid, { peopleCount: 2, people: [{ name: 'X', phone: '9600000000' }] }) });
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /Only 1 place is left/);
+  const day = (await client()('/api/availability')).body.days.find((d) => d.date === '2030-01-11');
+  assert.equal(day.sessions.find((s) => s.period === 'evening').remaining, 1);
+});
+
+test('hold, approve, reminders, greeting, QR pass at session start, scan once', async () => {
+  const a = await admin();
+  await openSessions(a);
+  const sid = await sessionId('2030-01-11', 'afternoon');
+  const v = await visitor();
+  const appt = (await v('/api/appointments', { method: 'POST', body: booking(sid, { peopleCount: 2, people: [{ name: 'Meera Rao', phone: '9123456780' }] }) })).body.appointment;
+
+  await a(`/api/admin/appointments/${appt.id}/hold`, { method: 'POST', body: {} });
+  assert.equal((await a('/api/admin/appointments?status=hold')).body.appointments.length, 1);
+  assert.equal((await a('/api/admin/appointments?status=pending')).body.appointments.length, 0);
+  await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: { note: 'Please bring an ID card' } });
+  await flush();
+  const confirm = templateText(messagesTo('+919876543210').at(-1));
+  assert.match(confirm, /Appointment confirmed/);
+  assert.match(confirm, /QR entry pass will be sent on WhatsApp on Friday, 11 January at 1:00 PM/);
+  assert.doesNotMatch(confirm, /\n/);
+
+  const pass = async () => (await v(`/api/me/appointments/${appt.id}/pass`)).body.pass;
+  assert.equal((await pass()).state, 'not_yet');
+  assert.equal((await pass()).code, undefined);
+
+  const { jobs } = app.locals;
+  const runAt = async (date, time) => { at(IST(date, time)); const n = jobs.run(); await flush(); return n; };
+  assert.equal(await runAt('2030-01-10', '17:59'), 0);
+  assert.equal(await runAt('2030-01-10', '18:00'), 1);      // day before
+  assert.match(templateText(messagesTo('+919876543210').at(-1)), /tomorrow/);
+  assert.equal(await runAt('2030-01-11', '06:59'), 0);
+  assert.equal(await runAt('2030-01-11', '07:00'), 1);      // greeting
+  assert.match(templateText(messagesTo('+919876543210').at(-1)), /Today is your visit.*1:00 PM/);
+  assert.equal(await runAt('2030-01-11', '12:59'), 0);
+
+  // Security can't let them in before the afternoon opens; an admin can.
+  const sRes = await login('9811111111', { signupAs: 'security', name: 'Ramesh Guard' });
+  const sid2 = (await a('/api/admin/security')).body.staff[0].id;
+  await a(`/api/admin/security/${sid2}/approve`, { method: 'POST' });
+  const code = db.prepare('SELECT checkin_code FROM appointments WHERE id = ?').get(appt.id).checkin_code;
+  const early = (await sRes('/api/staff/scan', { method: 'POST', body: { code } })).body;
+  assert.deepEqual([early.result, early.canAdmit, early.adminOverride], ['early', false, undefined]);
+  assert.match(early.message, /Afternoon passes open at 1:00 PM/);
+  assert.equal((await sRes('/api/staff/admit', { method: 'POST', body: { code } })).status, 409);
+
+  assert.equal(await runAt('2030-01-11', '13:00'), 1);      // the pass
+  const passMsg = sent.filter((s) => s.body?.template?.name === 'entry_pass').at(-1).body;
+  assert.equal(passMsg.to, '919876543210');
+  assert.equal(passMsg.template.components[0].parameters[0].image.id, 'media-1');
+  assert.match(templateText(sent.at(-1)), /valid only today and can be scanned only once/);
+  assert.equal(await runAt('2030-01-11', '13:01'), 0);
+
+  const ready = await pass();
+  assert.equal(ready.state, 'ready');
+  assert.equal(ready.code, code);
+  assert.match(ready.svg, /^<svg/);
+
+  const scan = (await sRes('/api/staff/scan', { method: 'POST', body: { code } })).body;
+  assert.deepEqual([scan.result, scan.canAdmit, scan.appointment.name, scan.appointment.peopleCount], ['ok', true, 'Asha Rao', 2]);
+  assert.equal(scan.appointment.people[0].name, 'Meera Rao');
+  assert.ok(scan.appointment.photo);
+  assert.equal((await sRes(scan.appointment.photo)).status, 200);
+  assert.equal((await sRes('/api/staff/admit', { method: 'POST', body: { code } })).status, 200);
+
+  const again = (await sRes('/api/staff/scan', { method: 'POST', body: { code } })).body;
+  assert.deepEqual([again.result, again.canAdmit, again.appointment.checkedInBy], ['used', false, 'Ramesh Guard']);
+  assert.match(again.message, /Already checked in/);
+  assert.equal((await sRes('/api/staff/admit', { method: 'POST', body: { code } })).status, 409);
+  assert.equal((await pass()).state, 'checked_in');
+  assert.equal((await sRes('/api/staff/recent')).body.people, 2);
+
+  // The next day the pass is no longer valid.
+  at(IST('2030-01-12', '13:30'));
+  assert.equal((await pass()).state, 'checked_in');
+});
+
+test('passes are only valid on their day; admins can override, security cannot', async () => {
+  const a = await admin();
+  await openSessions(a);
+  const sid = await sessionId('2030-01-11', 'morning');
+  const v = await visitor();
+  const appt = (await v('/api/appointments', { method: 'POST', body: booking(sid) })).body.appointment;
+  await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: {} });
+  const scan = (await a('/api/staff/scan', { method: 'POST', body: { appointmentId: appt.id } })).body;
+  assert.deepEqual([scan.result, scan.adminOverride], ['wrong_day', true]);
+  assert.equal((await a('/api/staff/admit', { method: 'POST', body: { appointmentId: appt.id } })).status, 409);
+  assert.equal((await a('/api/staff/admit', { method: 'POST', body: { appointmentId: appt.id, override: true } })).status, 200);
+});
+
+test('approving on the day skips the reminders and sends the pass right away', async () => {
+  const a = await admin();
+  await openSessions(a);
+  const sid = await sessionId('2030-01-10', 'morning'); // it is 09:00, morning is open
+  const v = await visitor();
+  const appt = (await v('/api/appointments', { method: 'POST', body: booking(sid) })).body.appointment;
+  await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: {} });
+  assert.equal(app.locals.jobs.run(), 1);
+  await flush();
+  const titles = sent.filter((s) => s.body?.to === '919876543210' && s.body.template.name !== 'login_code').map((s) => s.body.template.components.at(-1).parameters[0].text);
+  assert.deepEqual(titles, ['Request received 🙏', 'Appointment confirmed ✅', 'Your entry pass 🎟️']);
+});
+
+test('dashboard, date list with search, and who checked people in', async () => {
+  const a = await admin();
+  await openSessions(a);
+  const morning = await sessionId('2030-01-10', 'morning');
+  const evening = await sessionId('2030-01-10', 'evening');
+  const v1 = await visitor('9800000001', 'Asha Rao');
+  const v2 = await visitor('9800000002', 'Ravi Kumar');
+  const a1 = (await v1('/api/appointments', { method: 'POST', body: booking(morning, { peopleCount: 3, people: [{ name: 'A', phone: '9700000001' }, { name: 'B', phone: '9700000002' }] }) })).body.appointment;
+  const a2 = (await v2('/api/appointments', { method: 'POST', body: booking(evening, { reference: 'Bengaluru centre' }) })).body.appointment;
+  await a(`/api/admin/appointments/${a1.id}/approve`, { method: 'POST', body: {} });
+  await a(`/api/admin/appointments/${a2.id}/approve`, { method: 'POST', body: {} });
+  const s = await login('9811111111', { signupAs: 'security', name: 'Ramesh Guard' });
+  await a(`/api/admin/security/${(await a('/api/admin/security')).body.staff[0].id}/approve`, { method: 'POST' });
+  await s('/api/staff/admit', { method: 'POST', body: { appointmentId: a1.id } });
+
+  const d = (await a('/api/admin/dashboard')).body;
+  assert.deepEqual(
+    [d.summary.bookings, d.summary.people, d.summary.checkedInPeople, d.summary.remainingPeople, d.summary.securityActive],
+    [2, 4, 3, 1, 1],
+  );
+  assert.deepEqual(d.sessions.map((x) => [x.label, x.people, x.checkedInPeople]), [['Morning', 3, 3], ['Afternoon', 0, 0], ['Evening', 1, 0]]);
+  assert.equal(d.recent[0].checkedInBy, 'Ramesh Guard');
+  assert.equal(d.days.find((x) => x.date === '2030-01-10').checkedIn, 3);
+
+  const list = (await a('/api/admin/appointments?date=2030-01-10')).body;
+  assert.deepEqual([list.stats.approved, list.stats.checkedIn, list.stats.remaining, list.stats.remainingPeople], [2, 1, 1, 1]);
+  assert.equal((await a('/api/admin/appointments?date=2030-01-10&checked=out')).body.appointments[0].name, 'Ravi Kumar');
+  assert.equal((await a('/api/admin/appointments?date=2030-01-10&q=98000 00002')).body.appointments[0].name, 'Ravi Kumar');
+  assert.equal((await a('/api/admin/appointments?date=2030-01-10&q=bengaluru')).body.appointments.length, 2);
+});
+
+test('admins can message everyone visiting on a day', async () => {
+  const a = await admin();
+  await openSessions(a);
+  const sid = await sessionId('2030-01-11', 'morning');
+  for (const [p, n] of [['9800000001', 'Asha'], ['9800000002', 'Ravi']]) {
+    const v = await visitor(p, n);
+    const appt = (await v('/api/appointments', { method: 'POST', body: booking(sid) })).body.appointment;
+    await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: {} });
+  }
+  const res = await a('/api/admin/broadcast', { method: 'POST', body: { date: '2030-01-11', message: 'Venue changed to Hall B.' } });
+  assert.equal(res.body.recipients, 2);
+  await flush();
+  const broadcasts = sent.filter((s) => s.body?.template && templateText(s).includes('Hall B'));
+  assert.equal(broadcasts.length, 2);
+  assert.equal((await a('/api/admin/broadcasts?date=2030-01-11')).body.broadcasts[0].recipients, 2);
+  assert.equal((await a('/api/admin/broadcast', { method: 'POST', body: { date: '2030-01-20', message: 'x' } })).status, 400);
+});
+
+test('photos are private to their owner and staff', async () => {
+  const v1 = await visitor('9800000001', 'Asha');
+  const v2 = await visitor('9800000002', 'Ravi');
+  const photo = (await v1('/api/auth/me')).body.user.photo;
+  assert.equal((await v1(photo)).status, 200);
+  assert.equal((await v2(photo)).status, 404);
+  assert.equal((await client()(photo)).status, 401);
+  assert.equal((await (await admin())(photo)).status, 200);
+});
+
+test('admins are added by phone number and can be removed', async () => {
+  const a = await admin();
+  const added = await a('/api/admin/admins', { method: 'POST', body: { phone: '9000000002', name: 'Second Admin' } });
+  assert.equal(added.body.admin.role, 'admin');
+  const second = await login('9000000002');
+  assert.equal((await second('/api/auth/me')).body.user.role, 'admin');
+  assert.equal((await a(`/api/admin/admins/${added.body.admin.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await second('/api/admin/dashboard')).status, 401);
+  const me = (await a('/api/auth/me')).body.user;
+  assert.equal((await a(`/api/admin/admins/${me.id}`, { method: 'DELETE' })).status, 400);
 });
 
 test('cross-site requests are blocked', async () => {
   const a = await admin();
-  const res = await a('/api/admin/slots', { method: 'POST', headers: { Origin: 'https://evil.example' }, body: {} });
+  const res = await a('/api/admin/sessions', { method: 'POST', headers: { Origin: 'https://evil.example' }, body: {} });
   assert.equal(res.status, 403);
-});
-
-test('password reset by email link', async () => {
-  const v = await visitor({ email: 'reset@example.com' });
-  await v('/api/auth/logout', { method: 'POST' });
-  await client()('/api/auth/forgot', { method: 'POST', body: { email: 'reset@example.com' } });
-  await client()('/api/auth/forgot', { method: 'POST', body: { email: 'nobody@example.com' } });
-  await app.locals.notifier.settle();
-  const emails = outbox('email');
-  assert.equal(emails.length, 1);
-  const token = emails[0].body.match(/#\/reset\/([\w-]+)/)[1];
-  const c = client();
-  assert.equal((await c('/api/auth/reset', { method: 'POST', body: { token, password: 'newpassword' } })).status, 200);
-  assert.equal((await c('/api/auth/reset', { method: 'POST', body: { token, password: 'again12345' } })).status, 400);
-  assert.equal((await client()('/api/auth/login', { method: 'POST', body: { email: 'reset@example.com', password: 'newpassword' } })).status, 200);
-});
-
-test('bulk slot creation respects weekdays, duration and gap', async () => {
-  const a = await admin();
-  const res = await makeSlots(a, { fromDate: '2030-01-10', toDate: '2030-01-16', startTime: '10:00', endTime: '11:00', duration: 15, gap: 5, weekdays: [4, 5] });
-  assert.deepEqual(res.body, { created: 6, skipped: 0 });
-  const { body } = await client()('/api/slots');
-  assert.equal(body.slots.length, 6);
-  assert.equal(body.slots[1].start_time, '10:20');
-});
-
-test('booking requires an account and is prefilled from it', async () => {
-  const a = await admin();
-  await makeSlots(a);
-  const slotId = (await client()('/api/slots')).body.slots[0].id;
-  assert.equal((await client()('/api/appointments', { method: 'POST', body: { slotId, purpose: 'x' } })).status, 401);
-  const v = await visitor();
-  const res = await v('/api/appointments', { method: 'POST', body: { slotId, purpose: 'Seeking guidance' } });
-  assert.equal(res.status, 201);
-  assert.equal(res.body.appointment.name, 'Asha Rao');
-  assert.equal(res.body.appointment.phone, '+919876543210');
-  assert.equal((await v('/api/appointments', { method: 'POST', body: { slotId, purpose: 'again' } })).status, 409);
-});
-
-test('full journey: email + WhatsApp confirmations, reminders, QR pass and check-in', async () => {
-  const a = await admin();
-  await makeSlots(a);
-  const v = await visitor();
-  const slotId = (await client()('/api/slots')).body.slots[0].id; // 2030-01-11 10:00–10:15
-  const { body: { appointment } } = await v('/api/appointments', { method: 'POST', body: { slotId, purpose: 'Seeking guidance' } });
-
-  // Approval: in-app, email and WhatsApp.
-  await a(`/api/admin/appointments/${appointment.id}/approve`, { method: 'POST', body: { note: 'Bring photo ID' } });
-  await app.locals.notifier.settle();
-  let me = (await v('/api/me')).body;
-  assert.equal(me.notifications[0].title, 'Appointment confirmed 🙏');
-  assert.match(me.notifications[0].body, /Friday, 11 January 2030, 10:00–10:15/);
-  const emails = outbox('email').map((e) => e.subject);
-  assert.deepEqual(emails, ['Request received', 'Appointment confirmed 🙏']);
-  const wa = waRequests.at(-1).body;
-  assert.equal(wa.to, '919876543210');
-  assert.equal(wa.template.name, 'appointment_update');
-  assert.equal(wa.template.components[0].parameters[0].text, 'Appointment confirmed 🙏');
-  assert.doesNotMatch(wa.template.components[0].parameters[1].text, /\n/);
-  assert.equal(outbox('whatsapp').at(-1).status, 'sent');
-
-  // The QR pass is hidden until 10 minutes before.
-  let pass = (await v(`/api/me/appointments/${appointment.id}/pass`)).body.pass;
-  assert.equal(pass.state, 'not_yet');
-  assert.equal(pass.code, undefined);
-
-  // Reminders: 24h, 1h, then "pass ready" at 10 minutes before.
-  const remind = (iso) => sendDueReminders({ db, notifier: app.locals.notifier, config: app.locals.config, now: new Date(iso) });
-  assert.equal(remind('2030-01-10T03:30:00Z'), 0);  // 25h before
-  assert.equal(remind('2030-01-10T05:30:00Z'), 1);  // 23h before
-  assert.equal(remind('2030-01-11T03:40:00Z'), 1);  // 50 min before
-  assert.equal(remind('2030-01-11T04:21:00Z'), 1);  // 9 min before
-  assert.equal(remind('2030-01-11T04:22:00Z'), 0);
-  me = (await v('/api/me')).body;
-  assert.deepEqual(me.notifications.slice(0, 3).map((n) => n.title),
-    ['Your entry pass is ready 🎟️', 'Your meeting is in 1 hour', 'Upcoming meeting reminder']);
-
-  at('2030-01-11T04:21:00Z');
-  pass = (await v(`/api/me/appointments/${appointment.id}/pass`)).body.pass;
-  assert.equal(pass.state, 'ready');
-  assert.match(pass.svg, /^<svg/);
-
-  // Admin scans the QR code and admits the visitor.
-  assert.equal((await a('/api/admin/checkin/lookup', { method: 'POST', body: { code: 'bogus' } })).status, 404);
-  const lookup = (await a('/api/admin/checkin/lookup', { method: 'POST', body: { code: pass.code } })).body;
-  assert.deepEqual([lookup.canAdmit, lookup.needsOverride, lookup.appointment.name], [true, false, 'Asha Rao']);
-  const admitted = await a('/api/admin/checkin', { method: 'POST', body: { code: pass.code } });
-  assert.equal(admitted.status, 200);
-  assert.equal(admitted.body.appointment.checked_in_by, 'Seva Admin');
-  const again = await a('/api/admin/checkin', { method: 'POST', body: { code: pass.code } });
-  assert.equal(again.status, 409);
-
-  pass = (await v(`/api/me/appointments/${appointment.id}/pass`)).body.pass;
-  assert.equal(pass.state, 'checked_in');
-  assert.equal(pass.code, undefined);
-
-  // Dashboard reflects it.
-  const stats = (await a('/api/admin/stats')).body;
-  assert.equal(stats.today, '2030-01-11');
-  assert.deepEqual(stats.summary, { booked: 1, checkedIn: 1, pending: 0, awaiting: 0, open: 1 });
-  assert.equal(stats.todayList[0].checked_in_at !== null, true);
-});
-
-test('check-in on the wrong day needs an override; cancelled passes are refused', async () => {
-  const a = await admin();
-  await makeSlots(a);
-  const v = await visitor();
-  const [s1, s2] = (await client()('/api/slots')).body.slots;
-  const one = (await v('/api/appointments', { method: 'POST', body: { slotId: s1.id, purpose: 'x' } })).body.appointment;
-  const two = (await v('/api/appointments', { method: 'POST', body: { slotId: s2.id, purpose: 'y' } })).body.appointment;
-  await a(`/api/admin/appointments/${one.id}/approve`, { method: 'POST', body: {} });
-  await a(`/api/admin/appointments/${two.id}/approve`, { method: 'POST', body: {} });
-  await a(`/api/admin/appointments/${two.id}/cancel`, { method: 'POST', body: {} });
-
-  // It's the day before.
-  const early = (await a('/api/admin/checkin/lookup', { method: 'POST', body: { appointmentId: one.id } })).body;
-  assert.equal(early.needsOverride, true);
-  assert.match(early.reason, /not today/);
-  assert.equal((await a('/api/admin/checkin', { method: 'POST', body: { appointmentId: one.id } })).status, 409);
-  assert.equal((await a('/api/admin/checkin', { method: 'POST', body: { appointmentId: one.id, override: true } })).status, 200);
-
-  const cancelled = (await a('/api/admin/checkin/lookup', { method: 'POST', body: { appointmentId: two.id } })).body;
-  assert.equal(cancelled.canAdmit, false);
-  assert.equal((await a('/api/admin/checkin', { method: 'POST', body: { appointmentId: two.id, override: true } })).status, 409);
-});
-
-test('dashboard counts are per date', async () => {
-  const a = await admin();
-  await makeSlots(a, { fromDate: '2030-01-10', toDate: '2030-01-12', startTime: '10:00', endTime: '11:00', duration: 15 });
-  const v = await visitor();
-  const slots = (await client()('/api/slots')).body.slots;
-  const byDate = (d) => slots.filter((s) => s.date === d);
-  const book = async (slot) => (await v('/api/appointments', { method: 'POST', body: { slotId: slot.id, purpose: 'x' } })).body.appointment;
-  const a1 = await book(byDate('2030-01-10')[0]);
-  const a2 = await book(byDate('2030-01-11')[0]);
-  await book(byDate('2030-01-11')[1]);
-  await a(`/api/admin/appointments/${a1.id}/approve`, { method: 'POST', body: {} });
-  await a(`/api/admin/appointments/${a2.id}/approve`, { method: 'POST', body: {} });
-  at('2030-01-10T04:25:00Z'); // 09:55, a1 is at 10:00
-  await a('/api/admin/checkin', { method: 'POST', body: { appointmentId: a1.id } });
-
-  const { days } = (await a('/api/admin/stats?from=2030-01-10&to=2030-01-12')).body;
-  assert.deepEqual(days.map(({ date, booked, checkedIn, pending, slots: n }) => ({ date, booked, checkedIn, pending, n })), [
-    { date: '2030-01-10', booked: 1, checkedIn: 1, pending: 0, n: 4 },
-    { date: '2030-01-11', booked: 1, checkedIn: 0, pending: 1, n: 4 },
-    { date: '2030-01-12', booked: 0, checkedIn: 0, pending: 0, n: 4 },
-  ]);
-});
-
-test('visitors can message the admin team and get replies', async () => {
-  const a = await admin();
-  const v = await visitor();
-  assert.equal((await v('/api/me/messages', { method: 'POST', body: { body: 'Can I bring my mother?' } })).status, 201);
-  assert.equal((await a('/api/admin/summary')).body.unreadMessages, 1);
-  const { threads } = (await a('/api/admin/threads')).body;
-  assert.equal(threads[0].unread, 1);
-  const thread = (await a(`/api/admin/threads/${threads[0].user_id}`)).body;
-  assert.equal(thread.messages[0].body, 'Can I bring my mother?');
-  assert.equal((await a('/api/admin/summary')).body.unreadMessages, 0);
-
-  await a(`/api/admin/threads/${threads[0].user_id}`, { method: 'POST', body: { body: 'Yes, of course.' } });
-  const me = (await v('/api/me')).body;
-  assert.equal(me.unreadMessages, 1);
-  assert.equal(me.notifications[0].title, 'New message from the ashram');
-  const msgs = (await v('/api/me/messages')).body.messages;
-  assert.deepEqual(msgs.map((m) => [m.from_admin, m.body]), [[0, 'Can I bring my mother?'], [1, 'Yes, of course.']]);
-  assert.equal((await v('/api/me')).body.unreadMessages, 0);
-});
-
-test('admins can add, promote and remove admins', async () => {
-  const a = await admin();
-  const created = await a('/api/admin/admins', { method: 'POST', body: { name: 'Second', email: 'second@ashram.org', phone: '9000000001', password: 'secondpass' } });
-  assert.equal(created.status, 201);
-  await visitor({ email: 'helper@example.com' });
-  const promoted = await a('/api/admin/admins', { method: 'POST', body: { email: 'helper@example.com' } });
-  assert.equal(promoted.body.promoted, true);
-  assert.equal((await a('/api/admin/admins')).body.admins.length, 3);
-  assert.equal((await a(`/api/admin/admins/${created.body.admin.id}`, { method: 'DELETE' })).status, 200);
-  const self = db.prepare("SELECT id FROM users WHERE email = 'admin@ashram.org'").get().id;
-  assert.equal((await a(`/api/admin/admins/${self}`, { method: 'DELETE' })).status, 400);
-});
-
-test('visitors can hold at most three upcoming appointments', async () => {
-  const a = await admin();
-  await makeSlots(a, { fromDate: '2030-01-11', startTime: '10:00', endTime: '11:00', duration: 15 });
-  const v = await visitor();
-  const slots = (await client()('/api/slots')).body.slots;
-  for (const s of slots.slice(0, 3)) {
-    assert.equal((await v('/api/appointments', { method: 'POST', body: { slotId: s.id, purpose: 'x' } })).status, 201);
-  }
-  const res = await v('/api/appointments', { method: 'POST', body: { slotId: slots[3].id, purpose: 'x' } });
-  assert.equal(res.status, 409);
-  assert.match(res.body.error, /at most 3/);
 });

@@ -14,9 +14,10 @@
     "build:preview": "node preview/build.mjs"
   },
   "dependencies": {
+    "@vladmandic/face-api": "^1.7.15",
+    "compression": "1.8",
     "express": "^5.2.1",
     "jsqr": "^1.4.0",
-    "nodemailer": "^10.0.15",
     "qrcode": "^1.5.4",
     "web-push": "^3.6.7"
   },

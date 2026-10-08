@@ -1,4 +1,6 @@
-// Shared helpers for the visitor app and the admin app.
+// Shared helpers for the visitor, security and admin apps.
+import { icons } from './icons.js';
+
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -6,42 +8,59 @@ export function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-export async function api(path, { method = 'GET', body } = {}) {
-  const res = await fetch(path, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-    credentials: 'same-origin',
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const err = new Error(data.error || `Request failed (${res.status})`);
-    err.status = res.status;
-    throw err;
+export async function api(path, { method = 'GET', body, raw } = {}) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: raw ? { 'Content-Type': 'image/jpeg' } : body ? { 'Content-Type': 'application/json' } : {},
+      body: raw ?? (body ? JSON.stringify(body) : undefined),
+      credentials: 'same-origin',
+    });
+  } catch {
+    throw Object.assign(new Error('No internet connection. Please check your network and try again.'), { status: 0 });
   }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || `Something went wrong (${res.status})`), { status: res.status, data });
   return data;
 }
 
-// ---- Formatting ------------------------------------------------------------
+// ---- Formatting --------------------------------------------------------------
 
 const parseDate = (date) => { const [y, m, d] = date.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
-const fmt = (date, opts) => parseDate(date).toLocaleDateString(undefined, { timeZone: 'UTC', ...opts });
-
-export const formatDate = (date) => fmt(date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const fmt = (date, opts) => parseDate(date).toLocaleDateString('en-IN', { timeZone: 'UTC', ...opts });
+export const formatDate = (date) => fmt(date, { weekday: 'long', day: 'numeric', month: 'long' });
 export const formatShortDate = (date) => fmt(date, { weekday: 'short', day: 'numeric', month: 'short' });
-export const dayParts = (date) => ({ dow: fmt(date, { weekday: 'short' }), day: fmt(date, { day: 'numeric' }), month: fmt(date, { month: 'short' }) });
-export const formatSlot = (slot) => `${formatShortDate(slot.date)} · ${slot.start_time}–${slot.end_time}`;
-
-// SQLite datetime('now') is UTC without a zone marker.
+export const dayParts = (date) => ({ dow: fmt(date, { weekday: 'short' }), day: fmt(date, { day: 'numeric' }), mon: fmt(date, { month: 'short' }) });
+export const addDays = (date, n) => { const d = parseDate(date); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+export const formatPhone = (p) => (p?.startsWith('+91') && p.length === 13 ? `+91 ${p.slice(3, 8)} ${p.slice(8)}` : p ?? '');
 export const sqlToDate = (sql) => new Date(sql.replace(' ', 'T') + 'Z');
-export function formatTimestamp(sql) {
-  return sqlToDate(sql).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+export const formatTime = (sql) => sqlToDate(sql).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+export function formatWhen(sql) {
+  const d = sqlToDate(sql);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 }
-export const formatClock = (sql) => sqlToDate(sql).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+export const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+export const PERIOD_ICONS = { morning: icons.sun, afternoon: icons.sunHigh, evening: icons.moon };
 
+const STATUS_WORDS = { pending: 'Waiting', hold: 'On hold', approved: 'Confirmed', rejected: 'Declined', cancelled: 'Cancelled', active: 'Active', revoked: 'Removed' };
 export function statusChip(status, checkedIn) {
-  if (checkedIn) return '<span class="status checked-in">Checked in</span>';
-  return `<span class="status ${esc(status)}">${esc(status)}</span>`;
+  if (checkedIn) return `<span class="status checked-in">${icons.check.replace('<svg', '<svg width="14" height="14"')} Checked in</span>`;
+  return `<span class="status ${esc(status)}">${esc(STATUS_WORDS[status] ?? status)}</span>`;
+}
+
+export function photoTag(src, name, cls = '') {
+  if (!src) return `<span class="photo ${cls}" aria-hidden="true">${esc((name ?? '?').trim()[0]?.toUpperCase() ?? '?')}</span>`;
+  return `<img class="photo ${cls}" src="${esc(src)}" alt="" loading="lazy" decoding="async">`;
+}
+
+// One-tap call and WhatsApp buttons for a number.
+export function contactButtons(phone) {
+  const digits = String(phone ?? '').replace(/\D/g, '');
+  return `<a class="icon-btn call" href="tel:+${digits}" aria-label="Call ${esc(phone)}">${icons.phone}</a>
+    <a class="icon-btn wa" href="https://wa.me/${digits}" target="_blank" rel="noopener" aria-label="WhatsApp ${esc(phone)}">${icons.whatsapp}</a>`;
 }
 
 export function toast(message) {
@@ -54,14 +73,56 @@ export function toast(message) {
   setTimeout(() => el.remove(), 4500);
 }
 
-export function setBusy(button, busy) {
-  button.disabled = busy;
+// Bottom sheet; returns { el, close }.
+export function openSheet(html, { onClose } = {}) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'backdrop';
+  const sheet = document.createElement('div');
+  sheet.className = 'sheet';
+  sheet.setAttribute('role', 'dialog');
+  sheet.innerHTML = `<div class="grab"></div>${html}`;
+  document.body.append(backdrop, sheet);
+  let closed = false;
+  const close = () => { if (closed) return; closed = true; backdrop.remove(); sheet.remove(); onClose?.(); };
+  backdrop.addEventListener('click', close);
+  sheet.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });
+  return { el: sheet, close };
 }
 
-// ---- Hash router -------------------------------------------------------------
+// Asks "are you sure?" inside the page (works everywhere, unlike confirm()).
+export function confirmSheet({ title, message, confirm = 'Yes', danger = false }) {
+  return new Promise((resolve) => {
+    let answer = false;
+    const { el, close } = openSheet(`
+      <h2 style="margin:0 0 6px">${esc(title)}</h2>
+      ${message ? `<p class="sub">${esc(message)}</p>` : ''}
+      <div class="actions"><button class="btn light" data-close>No, go back</button><button class="btn ${danger ? 'red' : ''}" data-yes>${esc(confirm)}</button></div>`,
+    { onClose: () => resolve(answer) });
+    $('[data-yes]', el).addEventListener('click', () => { answer = true; close(); });
+  });
+}
+
+// Runs an action from a button: disables it meanwhile and shows errors.
+export async function busy(button, fn) {
+  if (button) button.disabled = true;
+  try { return await fn(); } catch (err) { toast(err.message); throw err; } finally { if (button?.isConnected) button.disabled = false; }
+}
+
+// Calls fn at most once per `ms`, always running the last call.
+export function throttle(fn, ms) {
+  let timer = null;
+  let pending = false;
+  return () => {
+    if (timer) { pending = true; return; }
+    fn();
+    timer = setTimeout(function tick() { timer = null; if (pending) { pending = false; fn(); timer = setTimeout(tick, ms); } }, ms);
+  };
+}
+
+// ---- Hash router ------------------------------------------------------------------
 
 // Each view gets a context: `el` to render into, `isCurrent()` to drop stale
-// async results, and `onCleanup(fn)` for intervals, streams and cameras.
+// async results, and `onCleanup(fn)` for timers, streams and cameras.
 export function createRouter({ outlet, routes, fallback, guard, onChange }) {
   let current = null;
   async function run() {
@@ -76,11 +137,11 @@ export function createRouter({ outlet, routes, fallback, guard, onChange }) {
       if (redirect && redirect !== hash) { location.hash = redirect; return; }
       onChange?.(route, hash);
       window.scrollTo(0, 0);
-      outlet.innerHTML = '<div class="spinner"></div>';
+      outlet.innerHTML = '<div class="card"><div class="spinner"></div></div>';
       try {
         await route.view(ctx, ...match.slice(1));
       } catch (err) {
-        if (ctx.isCurrent()) outlet.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+        if (ctx.isCurrent()) outlet.innerHTML = `<div class="card"><div class="notice bad">${icons.alert}<span>${esc(err.message)}</span></div><div class="actions"><button class="btn light" onclick="location.reload()">Try again</button></div></div>`;
       }
       return;
     }
@@ -88,118 +149,6 @@ export function createRouter({ outlet, routes, fallback, guard, onChange }) {
   }
   window.addEventListener('hashchange', run);
   return { run };
-}
-
-// ---- Auth screens (shared by both apps) ---------------------------------------
-
-export function authView(mode, { title, subtitle, allowSignup = true, onSuccess }) {
-  return async (ctx, token) => {
-    const forms = {
-      login: `
-        <form data-form="login" novalidate>
-          <label for="email">Email</label>
-          <input id="email" name="email" type="email" autocomplete="email" required>
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" autocomplete="current-password" required>
-          <div class="error hidden" data-error></div>
-          <div class="actions"><button class="btn block" type="submit">Log in</button></div>
-          <p class="small" style="text-align:center"><a href="#/forgot">Forgot password?</a></p>
-          ${allowSignup ? '<p class="small muted" style="text-align:center">New here? <a href="#/signup">Create an account</a></p>' : ''}
-        </form>`,
-      signup: `
-        <form data-form="signup" novalidate>
-          <label for="name">Full name</label>
-          <input id="name" name="name" autocomplete="name" required maxlength="100">
-          <label for="phone">Mobile number (WhatsApp)</label>
-          <input id="phone" name="phone" type="tel" autocomplete="tel" required maxlength="25" placeholder="+91 98765 43210">
-          <div class="hint">We'll send confirmations and reminders here on WhatsApp.</div>
-          <label for="email">Email</label>
-          <input id="email" name="email" type="email" autocomplete="email" required maxlength="200">
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" autocomplete="new-password" required minlength="8">
-          <div class="hint">At least 8 characters.</div>
-          <div class="error hidden" data-error></div>
-          <div class="actions"><button class="btn block" type="submit">Create account</button></div>
-          <p class="small muted" style="text-align:center">Already have an account? <a href="#/login">Log in</a></p>
-        </form>`,
-      forgot: `
-        <form data-form="forgot" novalidate>
-          <p class="muted">Enter your email and we'll send you a link to set a new password.</p>
-          <label for="email">Email</label>
-          <input id="email" name="email" type="email" autocomplete="email" required>
-          <div class="error hidden" data-error></div>
-          <div class="actions"><button class="btn block" type="submit">Send reset link</button></div>
-          <p class="small" style="text-align:center"><a href="#/login">Back to log in</a></p>
-        </form>`,
-      reset: `
-        <form data-form="reset" novalidate>
-          <label for="password">New password</label>
-          <input id="password" name="password" type="password" autocomplete="new-password" required minlength="8">
-          <div class="error hidden" data-error></div>
-          <div class="actions"><button class="btn block" type="submit">Set new password</button></div>
-        </form>`,
-    };
-    const heading = { login: title, signup: 'Create your account', forgot: 'Reset password', reset: 'Choose a new password' }[mode];
-    ctx.el.innerHTML = `
-      <div class="narrow">
-        <div class="auth-hero"><img src="/icon.svg" alt=""><h1>${esc(heading)}</h1>
-          ${mode === 'login' && subtitle ? `<p class="lead">${esc(subtitle)}</p>` : ''}
-          ${mode === 'signup' ? '<p class="lead">You need an account to book and receive your entry pass.</p>' : ''}
-        </div>
-        <div class="card">${forms[mode]}</div>
-      </div>`;
-    const form = $('form', ctx.el);
-    const error = $('[data-error]', form);
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      error.classList.add('hidden');
-      if (!form.checkValidity()) { form.reportValidity(); return; }
-      const button = $('button[type=submit]', form);
-      setBusy(button, true);
-      const data = Object.fromEntries(new FormData(form));
-      try {
-        if (mode === 'forgot') {
-          await api('/api/auth/forgot', { method: 'POST', body: data });
-          form.innerHTML = '<div class="success">If an account exists for that email, a reset link is on its way. Please check your inbox.</div><p style="text-align:center"><a href="#/login">Back to log in</a></p>';
-          return;
-        }
-        const path = { login: '/api/auth/login', signup: '/api/auth/signup', reset: '/api/auth/reset' }[mode];
-        const { user } = await api(path, { method: 'POST', body: mode === 'reset' ? { ...data, token } : data });
-        await onSuccess(user);
-      } catch (err) {
-        error.textContent = err.message;
-        error.classList.remove('hidden');
-        setBusy(button, false);
-      }
-    });
-  };
-}
-
-// ---- Push notifications --------------------------------------------------------
-
-export async function registerServiceWorker() {
-  if (window.__DEMO__ || !('serviceWorker' in navigator)) return null;
-  try { return await navigator.serviceWorker.register('/sw.js'); } catch { return null; }
-}
-
-function urlBase64ToUint8Array(base64) {
-  const padded = (base64 + '='.repeat((4 - (base64.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/');
-  return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
-}
-
-export const pushSupported = () => !window.__DEMO__ && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-
-export async function enablePush(vapidPublicKey) {
-  if (!pushSupported()) {
-    throw new Error('This browser does not support push notifications. On iPhone, add this app to your Home Screen first. You will still get WhatsApp and email updates.');
-  }
-  const permission = await Notification.requestPermission();
-  if (permission !== 'granted') throw new Error('Notifications were not allowed. You can enable them in your browser settings.');
-  const reg = await registerServiceWorker();
-  await navigator.serviceWorker.ready;
-  const sub = (await reg.pushManager.getSubscription())
-    ?? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) });
-  await api('/api/me/push-subscriptions', { method: 'POST', body: sub.toJSON() });
 }
 
 // EventSource that reconnects and reports its connection state.
@@ -219,4 +168,29 @@ export function liveStream(url, handlers, onState) {
   }
   connect();
   return () => { closed = true; clearTimeout(retry); source.close(); };
+}
+
+// Sends people to the app for their role.
+export function homeFor(user) {
+  if (!user) return null;
+  if (user.role === 'admin') return '/admin.html';
+  if (user.role === 'security') return '/security.html';
+  return '/';
+}
+
+// ---- Push notifications -------------------------------------------------------------
+
+export async function registerServiceWorker() {
+  if (window.__DEMO__ || !('serviceWorker' in navigator)) return null;
+  try { return await navigator.serviceWorker.register('/sw.js'); } catch { return null; }
+}
+const b64 = (s) => Uint8Array.from(atob((s + '='.repeat((4 - (s.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+export const pushSupported = () => !window.__DEMO__ && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+export async function enablePush(vapidPublicKey) {
+  if (!pushSupported()) throw new Error('This phone does not support app notifications. You will still get every update on WhatsApp.');
+  if (await Notification.requestPermission() !== 'granted') throw new Error('Notifications were not allowed. You will still get every update on WhatsApp.');
+  const reg = await registerServiceWorker();
+  await navigator.serviceWorker.ready;
+  const sub = (await reg.pushManager.getSubscription()) ?? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(vapidPublicKey) });
+  await api('/api/me/push-subscriptions', { method: 'POST', body: sub.toJSON() });
 }

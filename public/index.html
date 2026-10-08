@@ -4,26 +4,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Meet Gurudev</title>
-  <meta name="description" content="Book an appointment to meet Gurudev">
-  <meta name="theme-color" content="#d9731a">
+  <meta name="description" content="Book your visit to meet Gurudev">
+  <meta name="theme-color" content="#0a2357">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="modulepreload" href="/js/common.js">
 </head>
-<body>
-  <header class="topbar"><div class="inner">
-    <a class="brand" href="#/book"><img src="/icon.svg" alt="">Meet Gurudev</a>
-    <a class="icon-btn hidden" href="#/profile" id="profileLink" aria-label="Profile"></a>
-  </div></header>
+<body class="no-nav">
+  <header class="hero" id="hero">
+    <div class="bar">
+      <a class="brand" href="#/book"><img src="/icon.svg" alt="">Meet Gurudev</a>
+      <a class="avatar-btn hidden" href="#/profile" id="me" aria-label="My profile"></a>
+    </div>
+    <div id="steps" class="steps hidden" style="max-width:960px;margin:16px auto 0"></div>
+    <h1 id="title">Meet Gurudev</h1>
+    <p id="subtitle"></p>
+  </header>
+  <main id="app"><div class="card"><div class="spinner"></div></div></main>
   <nav class="tabbar hidden" id="tabbar" aria-label="Main"><div class="inner">
     <a href="#/book" data-tab="book"></a>
-    <a href="#/appointments" data-tab="appointments"></a>
+    <a href="#/visit" data-tab="visit"></a>
     <a href="#/updates" data-tab="updates"></a>
-    <a href="#/contact" data-tab="contact"></a>
+    <a href="#/profile" data-tab="profile"></a>
   </div></nav>
-  <main id="app"></main>
   <script type="module" src="/js/visitor.js"></script>
 </body>
 </html>

@@ -1,642 +1,557 @@
 import {
-  $, $$, api, esc, formatDate, formatShortDate, formatSlot, formatTimestamp, formatClock, statusChip, toast, setBusy,
-  createRouter, authView, liveStream,
+  $, $$, api, esc, formatDate, formatShortDate, formatPhone, formatTime, formatWhen, addDays, plural, statusChip, photoTag,
+  contactButtons, toast, openSheet, confirmSheet, busy, throttle, createRouter, liveStream, homeFor, PERIOD_ICONS,
 } from './common.js';
 import { icons } from './icons.js';
+import { renderLogin, renderProfileSetup } from './login.js';
 import { renderChart, legendHtml } from './chart.js';
 
 const outlet = $('#app');
-let me = null;
+let user = null;
+let config = null;
+let today = null;
 let stopStream = null;
 
-const TABS = [
-  ['dashboard', 'Dashboard', icons.chart],
-  ['requests', 'Requests', icons.inbox],
-  ['scan', 'Scan', icons.scan],
-  ['messages', 'Messages', icons.chat],
-  ['manage', 'Manage', icons.settings],
-];
-for (const [key, label, icon] of TABS) {
-  $(`[data-tab="${key}"]`).innerHTML = key === 'scan' ? `<span class="bubble">${icon}</span><span>${label}</span>` : `${icon}<span>${label}</span>`;
+const TABS = [['home', 'Dashboard', icons.home], ['requests', 'Requests', icons.inbox], ['visitors', 'Visitors', icons.users], ['security', 'Security', icons.shield], ['more', 'More', icons.more]];
+for (const [key, label, icon] of TABS) $(`[data-tab="${key}"]`).innerHTML = `${icon}<span>${label}</span>`;
+
+function header(title, subtitle = '', extra = '') {
+  $('#title').textContent = title;
+  $('#subtitle').textContent = subtitle;
+  $('#heroExtra').innerHTML = extra;
 }
 
-function setLoggedIn(user) {
-  me = user;
-  $('#tabbar').classList.toggle('hidden', !user);
-  $('#live').classList.toggle('hidden', !user);
+function setUser(u) {
+  user = u;
+  const ready = Boolean(u?.profileComplete);
+  $('#tabbar').classList.toggle('hidden', !ready);
+  document.body.classList.toggle('no-nav', !ready);
+  $('#me').classList.toggle('hidden', !ready);
+  $('#live').classList.toggle('hidden', !ready);
+  $('#me').innerHTML = u?.photo ? `<img src="${esc(u.photo)}" alt="">` : icons.user;
   stopStream?.();
   stopStream = null;
-  if (user) {
-    stopStream = liveStream('/api/admin/stream', {
-      changed: (e) => { refreshBadges(); window.dispatchEvent(new CustomEvent('admin:changed', { detail: e })); },
-    }, (up) => $('#live').classList.toggle('off', !up));
+  if (ready) {
+    const notify = throttle(() => { refreshBadges(); window.dispatchEvent(new CustomEvent('admin:changed')); }, 2500);
+    stopStream = liveStream('/api/staff/stream', { changed: notify }, (up) => $('#live').classList.toggle('off', !up));
     refreshBadges();
   }
 }
 
 async function refreshBadges() {
   try {
-    const { pending, unreadMessages } = await api('/api/admin/summary');
-    for (const [tab, n] of [['requests', pending], ['messages', unreadMessages]]) {
+    const { summary, today: t } = await api('/api/admin/dashboard');
+    today = t;
+    for (const [tab, n] of [['requests', summary.pending], ['security', summary.securityPending]]) {
       const link = $(`[data-tab="${tab}"]`);
       $('.dot', link)?.remove();
       if (n) link.insertAdjacentHTML('beforeend', `<span class="dot">${n}</span>`);
     }
-  } catch (err) {
-    if (err.status === 401 || err.status === 403) { setLoggedIn(null); location.hash = '#/login'; }
-  }
+  } catch { /* offline */ }
 }
 
-// Calls `fn` whenever the server reports a change of one of `kinds`.
-function onChanged(ctx, kinds, fn) {
-  const handler = (e) => {
-    if (!ctx.isCurrent() || (kinds && !kinds.includes(e.detail.kind))) return;
-    if (document.activeElement?.matches('input, textarea')) return;
-    fn(e.detail);
-  };
+// Re-render when the server reports a change (throttled), unless someone is typing.
+function onChanged(ctx, fn) {
+  const handler = () => { if (ctx.isCurrent() && !document.activeElement?.matches('input, textarea')) fn(); };
   window.addEventListener('admin:changed', handler);
   ctx.onCleanup(() => window.removeEventListener('admin:changed', handler));
 }
 
-const addDays = (date, n) => {
-  const [y, m, d] = date.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
-};
-
-// ---- Check-in sheet (used by the scanner and the dashboard) --------------------
-
-function openAdmitSheet(lookupBody, { onClose } = {}) {
-  const backdrop = document.createElement('div');
-  backdrop.className = 'backdrop';
-  const sheet = document.createElement('div');
-  sheet.className = 'sheet';
-  sheet.setAttribute('role', 'dialog');
-  sheet.innerHTML = '<div class="grab"></div><div class="spinner"></div>';
-  document.body.append(backdrop, sheet);
-  const close = () => { backdrop.remove(); sheet.remove(); onClose?.(); };
-  backdrop.addEventListener('click', close);
-
-  const banner = (kind, icon, text) => `<div class="result-banner ${kind}">${icon}<span>${esc(text)}</span></div>`;
-  const details = (a) => `
-    <div class="appt-when">${esc(a.name)}</div>
-    <dl class="detail">
-      <dt>Time</dt><dd>${esc(formatDate(a.slot.date))}, ${esc(a.slot.start_time)}–${esc(a.slot.end_time)}</dd>
-      <dt>Phone</dt><dd><a href="tel:${esc(a.phone)}">${esc(a.phone)}</a></dd>
-      <dt>Purpose</dt><dd>${esc(a.purpose)}</dd>
-      ${a.admin_note ? `<dt>Note</dt><dd>${esc(a.admin_note)}</dd>` : ''}
-      ${a.checked_in_at ? `<dt>Checked in</dt><dd>${esc(formatClock(a.checked_in_at))}${a.checked_in_by ? ` by ${esc(a.checked_in_by)}` : ''}</dd>` : ''}
-    </dl>`;
-
-  (async () => {
-    let result;
-    try {
-      result = await api('/api/admin/checkin/lookup', { method: 'POST', body: lookupBody });
-    } catch (err) {
-      sheet.innerHTML = `<div class="grab"></div>${banner('bad', icons.x, err.message)}<button class="btn secondary block" data-close>Close</button>`;
-      $('[data-close]', sheet).addEventListener('click', close);
-      return;
-    }
-    const a = result.appointment;
-    let head;
-    if (!result.canAdmit) head = banner('bad', icons.x, a.checked_in_at ? 'Already checked in' : result.reason);
-    else if (result.needsOverride) head = banner('warn', icons.alert, result.reason);
-    else head = banner('good', icons.check, 'Valid pass — ready to admit');
-    sheet.innerHTML = `<div class="grab"></div>${head}${details(a)}
-      <div class="actions">
-        ${result.canAdmit ? `<button class="btn ${result.needsOverride ? 'secondary' : 'ok'} block" data-admit>${icons.check} ${result.needsOverride ? 'Admit anyway' : 'Admit'}</button>` : ''}
-        <button class="btn secondary block" data-close>${result.canAdmit ? 'Cancel' : 'Close'}</button>
-      </div>`;
-    $('[data-close]', sheet).addEventListener('click', close);
-    $('[data-admit]', sheet)?.addEventListener('click', async (e) => {
-      setBusy(e.currentTarget, true);
-      try {
-        const { appointment } = await api('/api/admin/checkin', { method: 'POST', body: { ...lookupBody, override: result.needsOverride } });
-        sheet.innerHTML = `<div class="grab"></div>${banner('good', icons.check, `${appointment.name} is checked in`)}${details(appointment)}
-          <div class="actions"><button class="btn block" data-close>Done</button></div>`;
-        $('[data-close]', sheet).addEventListener('click', close);
-        if (navigator.vibrate) navigator.vibrate(80);
-      } catch (err) {
-        toast(err.message);
-        setBusy(e.currentTarget, false);
-      }
-    });
-  })();
-  return close;
+// Prev / date / next control shown in the header.
+function dayNav(date, onPick) {
+  $('#heroExtra').innerHTML = `<div class="day-nav">
+    <button class="icon-btn" data-prev aria-label="Previous day">${icons.back}</button>
+    <input type="date" value="${date}" aria-label="Choose a day" style="max-width:180px">
+    <button class="icon-btn" data-next aria-label="Next day">${icons.next}</button>
+    ${date !== today ? '<button class="btn small light" data-today style="margin-left:auto">Today</button>' : '<span class="lbl" style="margin-left:auto">Today</span>'}
+  </div>`;
+  $('[data-prev]').onclick = () => onPick(addDays(date, -1));
+  $('[data-next]').onclick = () => onPick(addDays(date, 1));
+  $('#heroExtra input').onchange = (e) => e.target.value && onPick(e.target.value);
+  const t = $('[data-today]');
+  if (t) t.onclick = () => onPick(today);
 }
 
-// ---- Dashboard ------------------------------------------------------------------
+// ---- Appointment card & actions -------------------------------------------------------
 
-let range = null; // { preset, from, to }
+function apptDetails(a) {
+  return `
+    <div class="row">${photoTag(a.photo, a.name, 'lg')}<div class="grow">
+      <div style="font-weight:800;font-size:1.1rem">${esc(a.name)}</div>
+      <div class="small muted">${esc(formatPhone(a.phone))}</div>
+      <div style="margin-top:6px">${statusChip(a.status, a.checkedInAt)}</div></div>
+      <div class="contact" style="display:flex;flex-direction:column;gap:8px">${contactButtons(a.phone)}</div></div>
+    <dl class="details">
+      <dt>Day</dt><dd><strong>${esc(formatShortDate(a.date))} · ${esc(a.periodLabel)}</strong></dd>
+      <dt>People</dt><dd><strong>${esc(plural(a.peopleCount, 'person', 'people'))}</strong></dd>
+      ${a.people.length ? `<dt>With</dt><dd>${a.people.map((p) => `${esc(p.name)} · <a href="tel:${esc(p.phone)}">${esc(formatPhone(p.phone))}</a>`).join('<br>')}</dd>` : ''}
+      <dt>Reference</dt><dd>${esc(a.reference)}</dd>
+      <dt>Purpose</dt><dd>${a.purposes.map((p) => `<span class="tag">${esc(p)}</span>`).join(' ')}</dd>
+      ${a.description ? `<dt>Details</dt><dd>${esc(a.description)}</dd>` : ''}
+      ${a.adminNote ? `<dt>Note</dt><dd>${esc(a.adminNote)}</dd>` : ''}
+      ${a.checkedInAt ? `<dt>Checked in</dt><dd><strong>${esc(formatTime(a.checkedInAt))}</strong>${a.checkedInBy ? ` by ${esc(a.checkedInBy)}` : ''}</dd>` : ''}
+      ${a.reviewedBy && !['pending'].includes(a.status) ? `<dt>Reviewed by</dt><dd>${esc(a.reviewedBy)}</dd>` : ''}
+      <dt>Requested</dt><dd>${esc(formatWhen(a.createdAt))}</dd>
+    </dl>`;
+}
 
-async function dashboardView(ctx) {
-  ctx.el.innerHTML = `
-    <div class="section-head" style="margin-top:0"><h1>Dashboard</h1></div>
-    <div class="chip-row" id="presets">
-      <button class="chip" data-preset="fortnight">Past week &amp; next 2 weeks</button>
-      <button class="chip" data-preset="next30">Next 30 days</button>
-      <button class="chip" data-preset="past30">Past 30 days</button>
-    </div>
-    <div id="dash"><div class="spinner"></div></div>`;
-  let today = null;
-  let lastDays = null;
+function apptActions(a) {
+  if (a.status === 'pending') return `<div class="actions"><button class="btn" data-act="approve">${icons.check} Approve</button><button class="btn amber" data-act="hold">${icons.pause} Hold</button><button class="btn danger" data-act="reject">${icons.x} Decline</button></div>`;
+  if (a.status === 'hold') return `<div class="actions"><button class="btn" data-act="approve">${icons.check} Approve</button><button class="btn danger" data-act="reject">${icons.x} Decline</button></div>`;
+  if (a.status === 'approved' && !a.checkedInAt) return `<div class="actions"><button class="btn blue" data-act="checkin">${icons.scan} Check in now</button><button class="btn danger" data-act="cancel">${icons.x} Cancel</button></div>`;
+  return '';
+}
 
-  const rangeFor = (preset, t) => ({
-    fortnight: { from: addDays(t, -6), to: addDays(t, 13) },
-    next30: { from: t, to: addDays(t, 29) },
-    past30: { from: addDays(t, -29), to: t },
-  }[preset]);
-
-  async function load() {
-    const dash = $('#dash', ctx.el);
-    $('.chart-card', dash)?.classList.add('stale');
-    const query = range ? `?from=${range.from}&to=${range.to}` : '';
-    const stats = await api(`/api/admin/stats${query}`);
-    if (!ctx.isCurrent()) return;
-    today = stats.today;
-    if (!range) range = { preset: 'fortnight', ...rangeFor('fortnight', today) };
-    $$('#presets .chip', ctx.el).forEach((c) => c.classList.toggle('on', c.dataset.preset === range.preset));
-    const s = stats.summary;
-    const pct = s.booked ? Math.round((s.checkedIn / s.booked) * 100) : 0;
-    const totals = stats.days.reduce((acc, d) => ({ booked: acc.booked + d.booked, checkedIn: acc.checkedIn + d.checkedIn }), { booked: 0, checkedIn: 0 });
-    lastDays = stats.days;
-
-    dash.innerHTML = `
-      <div class="muted small" style="margin-bottom:8px">Today · ${esc(formatDate(today))}</div>
-      <div class="tiles">
-        <div class="tile hero"><div class="label">Booked today</div><div class="value">${s.booked}</div></div>
-        <div class="tile"><div class="label">Checked in</div><div class="value">${s.checkedIn}</div>
-          <div class="meter" aria-hidden="true"><span style="width:${pct}%"></span></div><div class="small muted" style="margin-top:4px">${pct}% of today's bookings</div></div>
-        <div class="tile"><div class="label">Yet to arrive</div><div class="value">${s.awaiting}</div></div>
-        <a class="tile" href="#/requests" style="color:inherit;text-decoration:none"><div class="label">Pending requests today</div><div class="value">${s.pending}</div></a>
-      </div>
-
-      <div class="card chart-card">
-        <h2 style="margin-bottom:2px">Appointments by date</h2>
-        <div class="small muted">${esc(formatShortDate(range.from))} – ${esc(formatShortDate(range.to))} · ${totals.booked} booked, ${totals.checkedIn} checked in</div>
-        ${legendHtml()}
-        <div id="chart" style="position:relative"></div>
-        <details style="margin-top:10px"><summary class="small" style="cursor:pointer">Show as table</summary>
-          <div class="scroll-x"><table class="data">
-            <thead><tr><th>Date</th><th>Booked</th><th>Checked in</th><th>Pending</th><th>Open slots</th></tr></thead>
-            <tbody>${stats.days.map((d) => `<tr class="${d.date === today ? 'today' : ''}"><td>${esc(formatShortDate(d.date))}</td><td>${d.booked}</td><td>${d.checkedIn}</td><td>${d.pending}</td><td>${d.open}</td></tr>`).join('')}</tbody>
-          </table></div>
-        </details>
-      </div>
-
-      <div class="section-head"><h2>Today's visitors</h2><a class="btn small" href="#/scan">${icons.scan} Scan</a></div>
-      <div class="card flush">
-        ${stats.todayList.length ? stats.todayList.map((a) => `
-          <div class="item">
-            <div class="head">
-              <div><div class="title">${esc(a.slot.start_time)} · ${esc(a.name)}</div><div class="small muted">${esc(a.phone)}</div></div>
-              ${a.checked_in_at
-                ? `<span class="status checked-in">${icons.check.replace('<svg', '<svg width="14" height="14"')} ${esc(formatClock(a.checked_in_at))}</span>`
-                : `<button class="btn small secondary" data-checkin="${a.id}">Check in</button>`}
-            </div>
-          </div>`).join('') : '<div class="empty">No confirmed visitors today.</div>'}
-      </div>`;
-    renderChart($('#chart', dash), stats.days, today);
+// Runs an action on an appointment; resolves true when something changed.
+async function act(a, action, button) {
+  if (action === 'checkin') {
+    const scan = await busy(button, () => api('/api/staff/scan', { method: 'POST', body: { appointmentId: a.id } }));
+    if (!scan.canAdmit) {
+      if (!scan.adminOverride) { toast(scan.message); return false; }
+      if (!await confirmSheet({ title: 'Check in anyway?', message: scan.message, confirm: 'Yes, check in' })) return false;
+    }
+    await busy(button, () => api('/api/staff/admit', { method: 'POST', body: { appointmentId: a.id, override: !scan.canAdmit } }));
+    toast(`${a.name} checked in.`);
+    return true;
   }
+  let note = '';
+  if (action === 'reject' || action === 'cancel') {
+    const answer = await new Promise((resolve) => {
+      let ok = false;
+      const { el, close } = openSheet(`<h2 style="margin:0 0 6px">${action === 'reject' ? 'Decline this request?' : 'Cancel this appointment?'}</h2>
+        <p class="sub">${esc(a.name)} will be told on WhatsApp.</p>
+        <label for="note">Reason <span class="muted small">(optional, sent to them)</span></label><textarea id="note" maxlength="500"></textarea>
+        <div class="actions"><button class="btn light" data-close>Go back</button><button class="btn red" data-yes>${action === 'reject' ? 'Decline' : 'Cancel appointment'}</button></div>`,
+      { onClose: () => resolve(ok ? $('#note', el).value : null) });
+      $('[data-yes]', el).addEventListener('click', () => { ok = true; close(); });
+    });
+    if (answer === null) return false;
+    note = answer;
+  }
+  await busy(button, () => api(`/api/admin/appointments/${a.id}/${action}`, { method: 'POST', body: { note } }));
+  toast({ approve: `Approved. ${a.name} will get a WhatsApp confirmation.`, hold: 'Moved to On hold.', reject: 'Declined.', cancel: 'Cancelled.' }[action]);
+  return true;
+}
 
-  $('#presets', ctx.el).addEventListener('click', (e) => {
-    const preset = e.target.closest('[data-preset]')?.dataset.preset;
-    if (!preset || !today) return;
-    range = { preset, ...rangeFor(preset, today) };
-    load();
+function openAppointment(a, onChange) {
+  const { el, close } = openSheet(`${apptDetails(a)}${apptActions(a)}<button class="btn ghost block" data-close style="margin-top:8px">Close</button>`);
+  el.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    try { if (await act(a, b.dataset.act, b)) { close(); onChange(); } } catch { /* shown */ }
   });
-  ctx.el.addEventListener('click', (e) => {
-    const id = e.target.closest('[data-checkin]')?.dataset.checkin;
-    if (id) openAdmitSheet({ appointmentId: Number(id) });
-  });
-  const onResize = () => lastDays && $('#chart', ctx.el) && renderChart($('#chart', ctx.el), lastDays, today);
+}
+
+// ---- Dashboard -----------------------------------------------------------------------
+
+let dashDate = null;
+
+const ensureToday = async () => { today ??= (await api('/api/admin/dashboard')).today; };
+
+async function homeView(ctx) {
+  await ensureToday();
+  dashDate ??= today;
+  const pick = (d) => { dashDate = d; homeView(ctx); };
+  const load = async () => {
+    const d = await api(`/api/admin/dashboard?date=${dashDate}`);
+    if (!ctx.isCurrent()) return;
+    today = d.today;
+    header(dashDate === today ? 'Today' : formatDate(dashDate), dashDate === today ? formatDate(today) : '');
+    dayNav(dashDate, pick);
+    const s = d.summary;
+    const pct = s.people ? Math.round((s.checkedInPeople / s.people) * 100) : 0;
+    const ring = `<svg class="ring" viewBox="0 0 36 36" role="img" aria-label="${pct}% checked in"><circle cx="18" cy="18" r="15.5" fill="none" stroke="#e8f1fd" stroke-width="4"/>
+      <circle cx="18" cy="18" r="15.5" fill="none" stroke="url(#g)" stroke-width="4" stroke-linecap="round" stroke-dasharray="${(pct / 100) * 97.4} 97.4" transform="rotate(-90 18 18)"/>
+      <defs><linearGradient id="g"><stop offset="0" stop-color="#2f7de1"/><stop offset="1" stop-color="#1fbf63"/></linearGradient></defs>
+      <text x="18" y="21" text-anchor="middle" font-size="7.5" font-weight="800" fill="#0f1f3d">${pct}%</text></svg>`;
+    ctx.el.innerHTML = `
+      <div class="kpis">
+        <div class="kpi main">${ring}<div><div class="l">People checked in</div><div class="v">${s.checkedInPeople}<span class="muted" style="font-size:1.1rem;font-weight:700"> / ${s.people}</span></div></div></div>
+        <div class="kpi"><div class="l">Yet to arrive</div><div class="v">${s.remainingPeople}</div></div>
+        <div class="kpi"><div class="l">Bookings</div><div class="v">${s.bookings}</div></div>
+        <div class="kpi"><div class="l">Checked in</div><div class="v">${s.checkedInBookings}</div></div>
+      </div>
+      <div style="margin-top:14px">
+        ${s.pending ? `<a class="alert-link" href="#/requests"><span class="count">${s.pending}</span>New requests to review${icons.next}</a>` : ''}
+        ${s.hold ? `<a class="alert-link" href="#/requests?hold"><span class="count violet">${s.hold}</span>Requests on hold${icons.next}</a>` : ''}
+        ${s.securityPending ? `<a class="alert-link" href="#/security"><span class="count blue">${s.securityPending}</span>Security staff waiting for approval${icons.next}</a>` : ''}
+      </div>
+      <div class="two-col">
+        <div class="card">
+          <h2>Sessions</h2>
+          ${d.sessions.length ? d.sessions.map((x) => {
+            const p = x.people ? Math.round((x.checkedInPeople / x.people) * 100) : 0;
+            return `<div class="session-row"><div class="row" style="gap:8px"><span style="color:var(--blue-700);display:grid">${PERIOD_ICONS[x.period].replace('<svg', '<svg width="20" height="20"')}</span><strong>${esc(x.label)}</strong></div>
+              <div class="meter" title="${x.checkedInPeople} of ${x.people} people"><span style="width:${p}%"></span></div>
+              <span class="n">${x.checkedInPeople} / ${x.people}</span></div>`;
+          }).join('') + '<div class="small muted" style="margin-top:6px">People checked in / people confirmed</div>' : '<div class="empty">No sessions open on this day. <a href="#/sessions">Open days</a></div>'}
+        </div>
+        <div class="card">
+          <h2>Last 7 days and next 7 days</h2>
+          ${legendHtml()}
+          <div class="chart" id="chart"></div>
+        </div>
+      </div>
+      <div class="section-title"><span>Recent check-ins</span><a href="#/visitors" class="small">See all</a></div>
+      <div class="card flush">${d.recent.length ? d.recent.map((a) => `
+        <div class="person">${photoTag(a.photo, a.name)}<div class="grow"><div class="name">${esc(a.name)}</div>
+          <div class="meta">${esc(plural(a.peopleCount, 'person', 'people'))} · ${esc(a.periodLabel)}${a.checkedInBy ? ` · by ${esc(a.checkedInBy)}` : ''}</div></div>
+          <span class="meta">${esc(formatTime(a.checkedInAt))}</span></div>`).join('') : '<div class="empty">No one has checked in yet.</div>'}</div>`;
+    renderChart($('#chart', ctx.el), d.days, dashDate);
+  };
+  await load();
+  onChanged(ctx, load);
+  const onResize = throttle(() => ctx.isCurrent() && load(), 500);
   window.addEventListener('resize', onResize);
   ctx.onCleanup(() => window.removeEventListener('resize', onResize));
-  onChanged(ctx, ['appointment', 'checkin', 'slots'], load);
-  const timer = setInterval(load, 60000); // keeps "today" correct past midnight
-  ctx.onCleanup(() => clearInterval(timer));
-  await load();
 }
 
-// ---- Requests ---------------------------------------------------------------------
+// ---- Requests (pending / on hold) -----------------------------------------------------
 
-let requestStatus = 'pending';
-
-async function requestsView(ctx) {
-  ctx.el.innerHTML = `
-    <h1>Requests</h1>
-    <div class="chip-row" id="status">
-      ${['pending', 'approved', 'rejected', 'cancelled', ''].map((s) => `<button class="chip" data-status="${s}">${s ? s[0].toUpperCase() + s.slice(1) : 'All'}</button>`).join('')}
-    </div>
-    <div id="list"><div class="spinner"></div></div>`;
-
-  async function load() {
-    const { appointments, counts } = await api(`/api/admin/appointments?status=${requestStatus}`);
+async function requestsView(ctx, query) {
+  let status = query === '?hold' ? 'hold' : 'pending';
+  header('Requests', 'Approve, hold or decline. Approved visitors get a WhatsApp confirmation.',
+    `<div class="segments" style="max-width:960px;margin:16px auto 0"><button data-s="pending">Waiting</button><button data-s="hold">On hold</button></div>`);
+  const load = async () => {
+    $$('#heroExtra [data-s]').forEach((b) => b.classList.toggle('on', b.dataset.s === status));
+    const { appointments } = await api(`/api/admin/appointments?status=${status}`);
     if (!ctx.isCurrent()) return;
-    $$('#status .chip', ctx.el).forEach((c) => {
-      const n = c.dataset.status ? counts[c.dataset.status] ?? 0 : null;
-      c.classList.toggle('on', c.dataset.status === requestStatus);
-      c.textContent = (c.dataset.status ? c.dataset.status[0].toUpperCase() + c.dataset.status.slice(1) : 'All') + (n ? ` (${n})` : '');
-    });
-    $('#list', ctx.el).innerHTML = appointments.length ? appointments.map((a) => `
-      <div class="card" data-id="${a.id}">
-        <div class="head" style="display:flex;justify-content:space-between;gap:8px">
-          <div><div class="appt-when">${esc(formatShortDate(a.slot.date))} · ${esc(a.slot.start_time)}</div><div class="title">${esc(a.name)}</div></div>
-          ${statusChip(a.status, a.checked_in_at)}
-        </div>
-        <dl class="detail">
-          <dt>Phone</dt><dd><a href="tel:${esc(a.phone)}">${esc(a.phone)}</a> · <a href="https://wa.me/${esc(a.phone.replace(/\D/g, ''))}" target="_blank" rel="noopener">WhatsApp</a></dd>
-          <dt>Email</dt><dd><a href="mailto:${esc(a.email)}">${esc(a.email)}</a></dd>
-          <dt>Purpose</dt><dd style="white-space:pre-wrap">${esc(a.purpose)}</dd>
-          <dt>Requested</dt><dd>${esc(formatTimestamp(a.created_at))}</dd>
-          ${a.admin_note ? `<dt>Note</dt><dd>${esc(a.admin_note)}</dd>` : ''}
-        </dl>
-        ${a.status === 'pending' ? `
-          <label for="note-${a.id}">Note to visitor (optional)</label>
-          <input id="note-${a.id}" maxlength="1000" placeholder="e.g. Please bring a photo ID">
-          <div class="actions">
-            <button class="btn ok" data-action="approve" style="flex:1">${icons.check} Approve</button>
-            <button class="btn danger" data-action="reject" style="flex:1">Decline</button>
-          </div>` : ''}
-        ${a.status === 'approved' && !a.checked_in_at ? '<div class="actions"><button class="btn danger small" data-action="cancel">Cancel appointment</button></div>' : ''}
-      </div>`).join('') : '<div class="card empty">Nothing here.</div>';
-  }
-
-  $('#status', ctx.el).addEventListener('click', (e) => {
-    const chip = e.target.closest('[data-status]');
-    if (chip) { requestStatus = chip.dataset.status; load(); }
-  });
-  $('#list', ctx.el).addEventListener('click', async (e) => {
-    const button = e.target.closest('[data-action]');
-    if (!button) return;
-    const card = button.closest('[data-id]');
-    const { action } = button.dataset;
-    if (action === 'cancel' && !confirm('Cancel this approved appointment? The visitor will be notified.')) return;
-    setBusy(button, true);
-    try {
-      await api(`/api/admin/appointments/${card.dataset.id}/${action}`, { method: 'POST', body: { note: $('input', card)?.value ?? '' } });
-      toast({ approve: 'Approved — confirmation sent by app, WhatsApp and email.', reject: 'Declined — the visitor has been notified.', cancel: 'Cancelled — the visitor has been notified.' }[action]);
-      load();
-    } catch (err) {
-      toast(err.message);
-      setBusy(button, false);
-    }
-  });
-  onChanged(ctx, ['appointment'], load);
-  await load();
-}
-
-// ---- Scanner -----------------------------------------------------------------------
-
-function loadJsQR() {
-  if (window.jsQR) return Promise.resolve(window.jsQR);
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = '/vendor/jsQR.js';
-    s.onload = () => resolve(window.jsQR);
-    s.onerror = reject;
-    document.head.append(s);
-  });
-}
-
-async function scanView(ctx) {
-  ctx.el.innerHTML = `
-    <div class="narrow">
-      <h1>Scan entry pass</h1>
-      <p class="lead">Point the camera at the visitor's QR code.</p>
-      <div class="scanner"><video playsinline muted></video><div class="frame"></div><div class="msg" id="msg">Starting camera…</div></div>
-      <form class="card" id="manual" style="margin-top:14px">
-        <label for="code" style="margin-top:0">Or enter the code below the QR</label>
-        <div style="display:flex;gap:8px"><input id="code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" required><button class="btn">Check</button></div>
-      </form>
-    </div>`;
-  const video = $('video', ctx.el);
-  const msg = $('#msg', ctx.el);
-  let stream = null;
-  let paused = false;
-  let raf = null;
-
-  const handleCode = (code) => {
-    paused = true;
-    if (navigator.vibrate) navigator.vibrate(40);
-    const close = openAdmitSheet({ code }, { onClose: () => { paused = false; } });
-    ctx.onCleanup(close);
-  };
-
-  $('#manual', ctx.el).addEventListener('submit', (e) => {
-    e.preventDefault();
-    const code = e.target.code.value.trim().replace(/^Code:\s*/i, '');
-    if (code) { e.target.reset(); handleCode(code); }
-  });
-
-  ctx.onCleanup(() => { cancelAnimationFrame(raf); stream?.getTracks().forEach((t) => t.stop()); });
-
-  if (!navigator.mediaDevices?.getUserMedia) {
-    msg.textContent = 'Camera not available here (it needs HTTPS). Use the code box below.';
-    return;
-  }
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-  } catch {
-    msg.textContent = 'Camera permission was denied. Allow camera access, or use the code box below.';
-    return;
-  }
-  if (!ctx.isCurrent()) { stream.getTracks().forEach((t) => t.stop()); return; }
-  video.srcObject = stream;
-  await video.play();
-  msg.textContent = 'Looking for a QR code…';
-
-  let detect;
-  if ('BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats?.())?.includes('qr_code')) {
-    const detector = new BarcodeDetector({ formats: ['qr_code'] });
-    detect = async () => (await detector.detect(video))[0]?.rawValue;
-  } else {
-    const jsQR = await loadJsQR();
-    const canvas = document.createElement('canvas');
-    const g = canvas.getContext('2d', { willReadFrequently: true });
-    detect = async () => {
-      const w = video.videoWidth;
-      const h = video.videoHeight;
-      if (!w) return null;
-      const scale = Math.min(1, 640 / Math.max(w, h));
-      canvas.width = w * scale;
-      canvas.height = h * scale;
-      g.drawImage(video, 0, 0, canvas.width, canvas.height);
-      return jsQR(g.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' })?.data;
+    ctx.el.innerHTML = appointments.length ? appointments.map((a) => `<div class="card" data-id="${a.id}">${apptDetails(a)}${apptActions(a)}</div>`).join('')
+      : `<div class="card empty">${status === 'pending' ? 'No new requests. 🎉' : 'Nothing on hold.'}</div>`;
+    ctx.el.onclick = async (e) => {
+      const b = e.target.closest('[data-act]');
+      if (!b) return;
+      const a = appointments.find((x) => x.id === Number(b.closest('[data-id]').dataset.id));
+      try { if (await act(a, b.dataset.act, b)) { load(); refreshBadges(); } } catch { /* shown */ }
     };
-  }
-
-  let last = 0;
-  const tick = async (t) => {
-    if (!ctx.isCurrent()) return;
-    if (!paused && t - last > 200 && video.readyState >= 2) {
-      last = t;
-      try {
-        const code = await detect();
-        if (code && !paused && ctx.isCurrent()) handleCode(code);
-      } catch { /* keep scanning */ }
-    }
-    raf = requestAnimationFrame(tick);
   };
-  raf = requestAnimationFrame(tick);
-}
-
-// ---- Messages --------------------------------------------------------------------
-
-async function messagesView(ctx) {
-  const load = async () => {
-    const { threads } = await api('/api/admin/threads');
-    if (!ctx.isCurrent()) return;
-    ctx.el.innerHTML = `
-      <h1>Messages</h1>
-      <p class="lead">Questions from visitors.</p>
-      <div class="card flush">${threads.length ? threads.map((t) => `
-        <a class="item link ${t.unread ? 'unread' : ''}" href="#/messages/${t.user_id}">
-          <div class="head"><span class="title">${esc(t.name)}${t.unread ? ` <span class="status pending">${t.unread} new</span>` : ''}</span><span class="time">${esc(formatTimestamp(t.last_at))}</span></div>
-          <p class="muted small" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.last_from_admin ? 'You: ' : ''}${esc(t.last_body)}</p>
-        </a>`).join('') : '<div class="empty">No messages yet.</div>'}</div>`;
-  };
-  onChanged(ctx, ['message'], load);
+  $('#heroExtra').onclick = (e) => { const b = e.target.closest('[data-s]'); if (b) { status = b.dataset.s; load(); } };
+  ctx.onCleanup(() => { $('#heroExtra').onclick = null; });
   await load();
+  onChanged(ctx, load);
 }
 
-async function threadView(ctx, userId) {
+// ---- Visitors by date ------------------------------------------------------------------
+
+let visitDate = null;
+let visitFilter = 'all';
+
+async function visitorsView(ctx) {
+  await ensureToday();
+  visitDate ??= today;
+  let q = '';
+  const pick = (d) => { visitDate = d; visitorsView(ctx); };
+  header('Visitors', formatDate(visitDate));
+  dayNav(visitDate, pick);
   ctx.el.innerHTML = `
-    <a class="btn ghost small" href="#/messages">${icons.back} Messages</a>
-    <div id="who" style="margin:8px 0 12px"></div>
-    <div class="card flush">
-      <div class="thread" id="thread"></div>
-      <form class="composer" id="composer">
-        <textarea name="body" placeholder="Reply…" maxlength="2000" required aria-label="Reply"></textarea>
-        <button class="btn" type="submit" aria-label="Send">${icons.send}</button>
-      </form>
+    <div class="card" id="stats"><div class="spinner"></div></div>
+    <div class="search" style="margin-bottom:10px">${icons.search}<input id="q" type="search" placeholder="Search name, phone or reference" autocomplete="off"></div>
+    <div class="filter-row" id="filters">
+      ${[['all', 'Everyone'], ['out', 'Not arrived'], ['in', 'Checked in'], ['pending', 'Waiting'], ['hold', 'On hold']].map(([k, l]) => `<button class="filter ${visitFilter === k ? 'on' : ''}" data-f="${k}">${l}</button>`).join('')}
     </div>
-    <div id="visits"></div>`;
+    <div class="card flush" id="list" style="margin-top:8px"></div>
+    <button class="btn blue block" id="msgAll">${icons.whatsapp} Send WhatsApp message to this day's visitors</button>`;
   const load = async () => {
-    const { user, messages, appointments } = await api(`/api/admin/threads/${userId}`);
+    const params = new URLSearchParams({ date: visitDate });
+    if (['in', 'out'].includes(visitFilter)) params.set('checked', visitFilter);
+    if (['pending', 'hold'].includes(visitFilter)) params.set('status', visitFilter);
+    if (q) params.set('q', q);
+    const { appointments, stats: s } = await api(`/api/admin/appointments?${params}`);
     if (!ctx.isCurrent()) return;
-    $('#who', ctx.el).innerHTML = `<h1>${esc(user.name)}</h1>
-      <div class="small"><a href="tel:${esc(user.phone)}">${esc(user.phone)}</a> · <a href="https://wa.me/${esc(user.phone.replace(/\D/g, ''))}" target="_blank" rel="noopener">WhatsApp</a> · <a href="mailto:${esc(user.email)}">${esc(user.email)}</a></div>`;
-    const thread = $('#thread', ctx.el);
-    thread.innerHTML = messages.map((m) => `
-      <div class="bubble-msg ${m.from_admin ? 'mine' : 'theirs'}">${esc(m.body)}
-        <span class="meta">${m.from_admin ? `${esc(m.sender_name)} · ` : ''}${esc(formatTimestamp(m.created_at))}</span></div>`).join('') || '<div class="empty small">No messages.</div>';
-    thread.scrollTop = thread.scrollHeight;
-    $('#visits', ctx.el).innerHTML = appointments.length ? `<div class="section-head"><h2>Their visits</h2></div><div class="card flush">${appointments.map((a) => `
-      <div class="item"><div class="head"><span>${esc(formatSlot(a.slot))}</span>${statusChip(a.status, a.checked_in_at)}</div></div>`).join('')}</div>` : '';
+    $('#stats', ctx.el).innerHTML = `
+      <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
+        <div><div class="l small muted">Confirmed</div><div style="font-size:1.6rem;font-weight:800">${s.approved}</div><div class="small muted">${plural(s.people, 'person', 'people')}</div></div>
+        <div><div class="l small muted">Checked in</div><div style="font-size:1.6rem;font-weight:800;color:var(--green-dark)">${s.checkedIn}</div><div class="small muted">${plural(s.checkedInPeople, 'person', 'people')}</div></div>
+        <div><div class="l small muted">Not arrived</div><div style="font-size:1.6rem;font-weight:800;color:var(--blue-700)">${s.remaining}</div><div class="small muted">${plural(s.remainingPeople, 'person', 'people')}</div></div>
+      </div>`;
+    const list = $('#list', ctx.el);
+    list.innerHTML = appointments.length ? appointments.map((a) => `
+      <div class="person" data-id="${a.id}" style="cursor:pointer">
+        ${photoTag(a.photo, a.name)}
+        <div class="grow"><div class="name">${esc(a.name)}</div>
+          <div class="meta">${esc(a.periodLabel)} · ${esc(plural(a.peopleCount, 'person', 'people'))}${a.checkedInAt ? ` · in at ${esc(formatTime(a.checkedInAt))}${a.checkedInBy ? ` by ${esc(a.checkedInBy)}` : ''}` : ''}</div>
+          <div style="margin-top:4px">${statusChip(a.status, a.checkedInAt)}</div></div>
+        <div class="contact">${contactButtons(a.phone)}</div>
+      </div>`).join('') : '<div class="empty">No visitors match.</div>';
+    list.onclick = (e) => {
+      if (e.target.closest('a')) return;
+      const row = e.target.closest('[data-id]');
+      if (row) openAppointment(appointments.find((a) => a.id === Number(row.dataset.id)), load);
+    };
+  };
+  let t;
+  $('#q', ctx.el).addEventListener('input', (e) => { clearTimeout(t); t = setTimeout(() => { q = e.target.value.trim(); load(); }, 250); });
+  $('#filters', ctx.el).addEventListener('click', (e) => {
+    const b = e.target.closest('[data-f]');
+    if (!b) return;
+    visitFilter = b.dataset.f;
+    $$('#filters .filter', ctx.el).forEach((x) => x.classList.toggle('on', x === b));
+    load();
+  });
+  $('#msgAll', ctx.el).addEventListener('click', () => broadcastSheet(visitDate));
+  await load();
+  onChanged(ctx, load);
+}
+
+function broadcastSheet(date) {
+  const { el, close } = openSheet(`
+    <h2 style="margin:0 0 4px">Message visitors</h2>
+    <p class="sub">Sent on WhatsApp and in the app to everyone confirmed for <strong>${esc(formatDate(date))}</strong>.</p>
+    <label for="bp">Who</label>
+    <select id="bp"><option value="">Everyone that day</option>${Object.entries(config.periods).map(([k, p]) => `<option value="${k}">${esc(p.label)} only</option>`).join('')}</select>
+    <label for="bm">Message</label>
+    <textarea id="bm" maxlength="600" placeholder="For example: Today's meeting has moved to the main hall. Please come by 10:30 AM."></textarea>
+    <div class="actions"><button class="btn light" data-close>Cancel</button><button class="btn" data-send>${icons.send} Send</button></div>`);
+  $('[data-send]', el).addEventListener('click', async (e) => {
+    const message = $('#bm', el).value.trim();
+    if (!message) { toast('Please write a message.'); return; }
+    const { recipients } = await busy(e.currentTarget, () => api('/api/admin/broadcast', { method: 'POST', body: { date, period: $('#bp', el).value || null, message } }));
+    close();
+    toast(`Message sent to ${plural(recipients, 'visitor')}.`);
+  });
+}
+
+// ---- Security staff ------------------------------------------------------------------
+
+async function securityView(ctx) {
+  let q = '';
+  let tab = 'pending';
+  header('Security staff', 'Approve new staff, call them, or remove access.',
+    `<div class="segments" style="max-width:960px;margin:16px auto 0"><button data-s="pending">Waiting</button><button data-s="active">Active</button><button data-s="removed">Removed</button></div>`);
+  ctx.el.innerHTML = `<div class="search" style="margin-bottom:10px">${icons.search}<input id="q" type="search" placeholder="Search name or phone" autocomplete="off"></div><div id="list"></div>`;
+  const load = async () => {
+    const { staff } = await api(`/api/admin/security${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+    if (!ctx.isCurrent()) return;
+    const groups = { pending: staff.filter((s) => s.status === 'pending'), active: staff.filter((s) => s.status === 'active'), removed: staff.filter((s) => ['revoked', 'rejected'].includes(s.status)) };
+    $$('#heroExtra [data-s]').forEach((b) => { b.classList.toggle('on', b.dataset.s === tab); b.textContent = `${{ pending: 'Waiting', active: 'Active', removed: 'Removed' }[b.dataset.s]} (${groups[b.dataset.s].length})`; });
+    const list = groups[tab];
+    $('#list', ctx.el).innerHTML = list.length ? `<div class="card flush">${list.map((s) => `
+      <div class="person" data-id="${s.id}" style="flex-wrap:wrap">
+        ${photoTag(s.photo, s.name, 'lg')}
+        <div class="grow"><div class="name">${esc(s.name)}</div><div class="meta">${esc(formatPhone(s.phone))}</div>
+          <div class="meta">${s.status === 'active' ? `Let in ${plural(s.checkinsToday, 'group')} today` : `Registered ${esc(formatWhen(s.createdAt))}`}${s.reviewedBy ? ` · by ${esc(s.reviewedBy)}` : ''}</div></div>
+        <div class="contact">${contactButtons(s.phone)}</div>
+        <div class="actions" style="width:100%;margin-top:6px">
+          ${s.status === 'pending' ? `<button class="btn small" data-a="approve">${icons.check} Approve</button><button class="btn small danger" data-a="reject">Reject</button>` : ''}
+          ${s.status === 'active' ? `<button class="btn small danger" data-a="revoke">${icons.x} Remove access</button>` : ''}
+          ${['revoked', 'rejected'].includes(s.status) ? `<button class="btn small" data-a="approve">Give access again</button>` : ''}
+        </div>
+      </div>`).join('')}</div>` : `<div class="card empty">${{ pending: 'No one is waiting.', active: 'No active security staff yet.', removed: 'No one here.' }[tab]}</div>`;
+  };
+  $('#heroExtra').onclick = (e) => { const b = e.target.closest('[data-s]'); if (b) { tab = b.dataset.s; load(); } };
+  ctx.onCleanup(() => { $('#heroExtra').onclick = null; });
+  let t;
+  $('#q', ctx.el).addEventListener('input', (e) => { clearTimeout(t); t = setTimeout(() => { q = e.target.value.trim(); load(); }, 250); });
+  $('#list', ctx.el).addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-a]');
+    if (!b) return;
+    const id = b.closest('[data-id]').dataset.id;
+    const name = $('.name', b.closest('[data-id]')).textContent;
+    if (b.dataset.a !== 'approve' && !await confirmSheet({ title: b.dataset.a === 'revoke' ? `Remove ${name}'s access?` : `Reject ${name}?`, message: 'They will not be able to scan passes.', confirm: 'Yes', danger: true })) return;
+    await busy(b, () => api(`/api/admin/security/${id}/${b.dataset.a}`, { method: 'POST' }));
+    toast({ approve: `${name} can now scan passes.`, revoke: `${name}'s access was removed.`, reject: 'Rejected.' }[b.dataset.a]);
+    load();
     refreshBadges();
-  };
-  $('#composer', ctx.el).addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const field = e.target.body;
-    if (!field.value.trim()) return;
-    const button = $('button', e.target);
-    setBusy(button, true);
-    try { await api(`/api/admin/threads/${userId}`, { method: 'POST', body: { body: field.value } }); field.value = ''; await load(); } catch (x) { toast(x.message); }
-    setBusy(button, false);
   });
-  onChanged(ctx, ['message'], (d) => String(d.userId) === String(userId) && load());
   await load();
+  onChanged(ctx, load);
 }
 
-// ---- Manage: slots and admins -------------------------------------------------------
+// ---- More ----------------------------------------------------------------------------
 
-async function manageView(ctx) {
-  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const today = new Date().toISOString().slice(0, 10);
+function moreView(ctx) {
+  header('More');
+  const link = (href, icon, title, sub) => `<a class="person item-link" href="${href}"><span class="photo" style="width:44px;height:44px;border-radius:12px">${icon}</span><div class="grow"><div class="name">${title}</div><div class="meta">${sub}</div></div>${icons.next.replace('<svg', '<svg width="20" height="20" style="color:var(--muted)"')}</a>`;
   ctx.el.innerHTML = `
-    <h1>Manage</h1>
-    <div class="chip-row" id="sections">
-      <button class="chip on" data-sec="slots">Slots</button>
-      <button class="chip" data-sec="admins">Admins</button>
-      <button class="chip" data-sec="account">My account</button>
+    <div class="card row">${photoTag(user.photo, user.name, 'lg')}<div class="grow"><div style="font-weight:800;font-size:1.1rem">${esc(user.name)}</div><div class="muted small">${esc(formatPhone(user.phone))} · Admin</div></div></div>
+    <div class="card flush">
+      ${link('/security.html#/scan', icons.scan, 'Scan passes', 'Open the scanner')}
+      ${link('#/sessions', icons.calendar, 'Open days and sessions', 'Choose days, Morning / Afternoon / Evening and places')}
+      ${link('#/broadcast', icons.whatsapp, 'Send WhatsApp message', 'Tell a day\'s visitors about changes')}
+      ${link('#/admins', icons.key, 'Admins', 'Add or remove admins')}
+      ${link('#/outbox', icons.message, 'WhatsApp delivery', 'See sent and failed messages')}
     </div>
-
-    <section data-sec="slots">
-      <form class="card" id="slotForm">
-        <h2>Add slots</h2>
-        <div class="row">
-          <div><label for="fromDate">From date</label><input id="fromDate" name="fromDate" type="date" required value="${today}"></div>
-          <div><label for="toDate">To date</label><input id="toDate" name="toDate" type="date" required value="${today}"></div>
-        </div>
-        <div class="row">
-          <div><label for="startTime">Daily start</label><input id="startTime" name="startTime" type="time" value="10:00" required></div>
-          <div><label for="endTime">Daily end</label><input id="endTime" name="endTime" type="time" value="12:00" required></div>
-        </div>
-        <div class="row">
-          <div><label for="duration">Meeting length (min)</label><input id="duration" name="duration" type="number" min="5" max="480" value="15" required></div>
-          <div><label for="gap">Break between (min)</label><input id="gap" name="gap" type="number" min="0" max="240" value="5" required></div>
-        </div>
-        <label>Days of the week</label>
-        <div class="weekdays">${DAYS.map((d, i) => `<label><input type="checkbox" value="${i}" checked> ${d}</label>`).join('')}</div>
-        <div class="actions"><button class="btn block" type="submit">Create slots</button></div>
-      </form>
-      <div class="section-head"><h2>Upcoming slots</h2></div>
-      <div id="slotList"><div class="spinner"></div></div>
-    </section>
-
-    <section data-sec="admins" class="hidden">
-      <form class="card" id="adminForm" novalidate>
-        <h2>Add an admin</h2>
-        <p class="small muted" style="margin-top:0">If the email already has an account, it will be given admin access. Otherwise a new admin account is created with this password.</p>
-        <label for="aEmail">Email</label><input id="aEmail" name="email" type="email" required>
-        <div class="row">
-          <div><label for="aName">Name</label><input id="aName" name="name" maxlength="100"></div>
-          <div><label for="aPhone">Mobile</label><input id="aPhone" name="phone" type="tel" maxlength="25"></div>
-        </div>
-        <label for="aPass">Temporary password</label><input id="aPass" name="password" type="text" minlength="8" autocomplete="off">
-        <div class="actions"><button class="btn block" type="submit">Add admin</button></div>
-      </form>
-      <div class="card flush" id="adminList"></div>
-    </section>
-
-    <section data-sec="account" class="hidden">
-      <div class="card">
-        <h2>${esc(me.name)}</h2>
-        <p class="muted" style="margin-top:0">${esc(me.email)}</p>
-        <div class="actions">
-          <a class="btn secondary" href="/" target="_blank">Open visitor app</a>
-          <button class="btn danger" id="logout">${icons.logout} Log out</button>
-        </div>
-      </div>
-      <form class="card" id="pwForm">
-        <h2>Change password</h2>
-        <label for="cur">Current password</label><input id="cur" name="currentPassword" type="password" required>
-        <label for="new">New password</label><input id="new" name="newPassword" type="password" minlength="8" required>
-        <div class="actions"><button class="btn secondary" type="submit">Update password</button></div>
-      </form>
-    </section>`;
-
-  $('#sections', ctx.el).addEventListener('click', (e) => {
-    const sec = e.target.closest('[data-sec]')?.dataset.sec;
-    if (!sec) return;
-    $$('#sections .chip', ctx.el).forEach((c) => c.classList.toggle('on', c.dataset.sec === sec));
-    $$('section[data-sec]', ctx.el).forEach((s) => s.classList.toggle('hidden', s.dataset.sec !== sec));
-    if (sec === 'admins') loadAdmins();
-  });
-
-  async function loadSlots() {
-    const { slots } = await api('/api/admin/slots');
-    if (!ctx.isCurrent()) return;
-    const byDate = new Map();
-    for (const s of slots) byDate.set(s.date, [...(byDate.get(s.date) ?? []), s]);
-    $('#slotList', ctx.el).innerHTML = slots.length ? [...byDate].map(([date, list]) => `
-      <div class="card"><h3>${esc(formatDate(date))}</h3><div class="slot-grid">
-        ${list.map((s) => {
-          const state = s.checked_in_at ? 'checked-in' : s.appointment_status ?? (s.is_blocked ? 'blocked' : 'free');
-          const label = s.appointment_status ? `${s.checked_in_at ? 'checked in' : s.appointment_status} · ${s.visitor_name}` : state === 'free' ? 'open' : state;
-          return `<div class="slot-cell" data-slot="${s.id}">
-            <div><strong>${esc(s.start_time)}–${esc(s.end_time)}</strong></div>
-            <div><span class="status ${esc(state)}" style="max-width:100%;overflow:hidden;text-overflow:ellipsis">${esc(label)}</span></div>
-            ${s.appointment_status ? '' : `<div class="btns">
-              <button class="btn secondary small" data-slot-action="${s.is_blocked ? 'unblock' : 'block'}">${s.is_blocked ? 'Unblock' : 'Block'}</button>
-              <button class="btn danger small" data-slot-action="delete" aria-label="Delete">${icons.x}</button></div>`}
-          </div>`;
-        }).join('')}
-      </div></div>`).join('') : '<div class="card empty">No upcoming slots. Add some above.</div>';
-  }
-
-  async function loadAdmins() {
-    const { admins } = await api('/api/admin/admins');
-    if (!ctx.isCurrent()) return;
-    $('#adminList', ctx.el).innerHTML = admins.map((a) => `
-      <div class="item"><div class="head">
-        <div><div class="title">${esc(a.name)}${a.id === me.id ? ' (you)' : ''}</div><div class="small muted">${esc(a.email)}</div></div>
-        ${a.id === me.id ? '' : `<button class="btn danger small" data-remove="${a.id}">Remove</button>`}
-      </div></div>`).join('');
-  }
-
-  $('#slotList', ctx.el).addEventListener('click', async (e) => {
-    const button = e.target.closest('[data-slot-action]');
-    if (!button) return;
-    const id = button.closest('[data-slot]').dataset.slot;
-    const action = button.dataset.slotAction;
-    try {
-      if (action === 'delete') await api(`/api/admin/slots/${id}`, { method: 'DELETE' });
-      else await api(`/api/admin/slots/${id}`, { method: 'PATCH', body: { blocked: action === 'block' } });
-      loadSlots();
-    } catch (err) { toast(err.message); }
-  });
-
-  $('#fromDate', ctx.el).addEventListener('change', () => {
-    const to = $('#toDate', ctx.el);
-    if (!to.value || to.value < $('#fromDate', ctx.el).value) to.value = $('#fromDate', ctx.el).value;
-  });
-  $('#slotForm', ctx.el).addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const data = Object.fromEntries(new FormData(e.target));
-    const weekdays = $$('.weekdays input:checked', ctx.el).map((i) => Number(i.value));
-    try {
-      const { created, skipped } = await api('/api/admin/slots', { method: 'POST', body: { ...data, duration: Number(data.duration), gap: Number(data.gap), weekdays } });
-      toast(`Created ${created} slot${created === 1 ? '' : 's'}${skipped ? ` (${skipped} already existed)` : ''}.`);
-      loadSlots();
-    } catch (err) { toast(err.message); }
-  });
-
-  $('#adminForm', ctx.el).addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const data = Object.fromEntries(new FormData(e.target));
-    try {
-      const { admin, promoted } = await api('/api/admin/admins', { method: 'POST', body: data });
-      toast(promoted ? `${admin.name} is now an admin.` : `Admin account created for ${admin.email}.`);
-      e.target.reset();
-      loadAdmins();
-    } catch (err) { toast(err.message); }
-  });
-  $('#adminList', ctx.el).addEventListener('click', async (e) => {
-    const id = e.target.closest('[data-remove]')?.dataset.remove;
-    if (!id || !confirm('Remove admin access for this person?')) return;
-    try { await api(`/api/admin/admins/${id}`, { method: 'DELETE' }); loadAdmins(); } catch (err) { toast(err.message); }
-  });
-
-  $('#pwForm', ctx.el).addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (!e.target.checkValidity()) { e.target.reportValidity(); return; }
-    try { await api('/api/auth/change-password', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); e.target.reset(); toast('Password updated.'); } catch (err) { toast(err.message); }
-  });
-  $('#logout', ctx.el).addEventListener('click', async () => {
+    <button class="btn danger block" data-logout>${icons.logout} Log out</button>`;
+  $('[data-logout]', ctx.el).addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
-    setLoggedIn(null);
+    setUser(null);
     location.hash = '#/login';
   });
-
-  onChanged(ctx, ['slots', 'appointment', 'checkin'], loadSlots);
-  await loadSlots();
 }
 
-// ---- Boot -------------------------------------------------------------------------
+async function sessionsView(ctx) {
+  await ensureToday();
+  header('Open days', 'Choose which days and times visitors can book, and how many people each can take.');
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  ctx.el.innerHTML = `
+    <form class="card" id="add">
+      <h2>Open more days</h2>
+      <div class="two-col">
+        <div><label for="from">From</label><input id="from" name="fromDate" type="date" value="${today}" required></div>
+        <div><label for="to">To</label><input id="to" name="toDate" type="date" value="${addDays(today, 30)}" required></div>
+      </div>
+      <div class="label">Days of the week</div>
+      <div class="chips">${DAYS.map((d, i) => `<label class="tag" style="margin:0;display:inline-flex;gap:6px;align-items:center;padding:8px 12px;font-size:.9rem"><input type="checkbox" name="wd" value="${i}" ${i ? 'checked' : ''} style="width:auto"> ${d}</label>`).join('')}</div>
+      <div class="label">Times of day</div>
+      <div class="chips">${Object.entries(config.periods).map(([k, p]) => `<label class="tag" style="margin:0;display:inline-flex;gap:6px;align-items:center;padding:8px 12px;font-size:.9rem"><input type="checkbox" name="period" value="${k}" checked style="width:auto"> ${esc(p.label)} <span class="muted">(from ${esc(p.opensAt)})</span></label>`).join('')}</div>
+      <label for="cap">People per session</label>
+      <input id="cap" name="capacity" type="number" min="1" max="10000" value="100" required>
+      <div class="actions"><button class="btn block" type="submit">${icons.plus} Open these days</button></div>
+    </form>
+    <div class="section-title">Next 30 days</div><div id="list"></div>`;
+  const load = async () => {
+    const { sessions } = await api(`/api/admin/sessions?from=${today}&to=${addDays(today, 30)}`);
+    if (!ctx.isCurrent()) return;
+    const byDate = new Map();
+    for (const s of sessions) byDate.set(s.date, [...(byDate.get(s.date) ?? []), s]);
+    $('#list', ctx.el).innerHTML = byDate.size ? [...byDate].map(([date, list]) => `
+      <div class="card"><h3>${esc(formatDate(date))}</h3>${list.map((s) => `
+        <div class="session-row" data-id="${s.id}" style="grid-template-columns:auto 1fr auto">
+          <strong style="min-width:92px">${esc(s.label)}</strong>
+          <div><div class="meter"><span style="width:${Math.min(100, Math.round((s.booked / s.capacity) * 100))}%"></span></div>
+            <div class="small muted" style="margin-top:4px">${s.booked} of ${s.capacity} places taken${s.is_closed ? ' · <strong style="color:var(--red)">Closed</strong>' : ''}</div></div>
+          <button class="btn small light" data-edit>${icons.edit}</button>
+        </div>`).join('')}</div>`).join('') : '<div class="card empty">No days open yet. Use the form above.</div>';
+  };
+  $('#add', ctx.el).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const body = {
+      fromDate: f.fromDate.value, toDate: f.toDate.value, capacity: Number(f.capacity.value),
+      weekdays: $$('[name=wd]:checked', f).map((i) => Number(i.value)), periods: $$('[name=period]:checked', f).map((i) => i.value),
+    };
+    const { created, skipped } = await busy($('button[type=submit]', f), () => api('/api/admin/sessions', { method: 'POST', body }));
+    toast(`${plural(created, 'session')} opened${skipped ? ` (${skipped} already open)` : ''}.`);
+    load();
+  });
+  $('#list', ctx.el).addEventListener('click', async (e) => {
+    const row = e.target.closest('[data-edit]')?.closest('[data-id]');
+    if (!row) return;
+    const id = row.dataset.id;
+    const { sessions } = await api(`/api/admin/sessions?from=${today}&to=${addDays(today, 30)}`);
+    const s = sessions.find((x) => x.id === Number(id));
+    const { el, close } = openSheet(`<h2 style="margin:0 0 4px">${esc(formatDate(s.date))} · ${esc(s.label)}</h2><p class="sub">${s.booked} places taken.</p>
+      <label for="ec">People allowed</label><input id="ec" type="number" min="1" max="10000" value="${s.capacity}">
+      <div class="actions"><button class="btn" data-save>Save</button></div>
+      <div class="actions">
+        <button class="btn ${s.is_closed ? '' : 'amber'}" data-toggle>${s.is_closed ? 'Open for booking' : 'Close for booking'}</button>
+        ${s.bookings ? '' : `<button class="btn danger" data-del>${icons.trash} Delete</button>`}
+      </div>`);
+    const patch = async (b, body, msg) => { await busy(b, () => api(`/api/admin/sessions/${id}`, { method: 'PATCH', body })); close(); toast(msg); load(); };
+    $('[data-save]', el).addEventListener('click', (ev) => patch(ev.currentTarget, { capacity: Number($('#ec', el).value) }, 'Saved.'));
+    $('[data-toggle]', el).addEventListener('click', (ev) => patch(ev.currentTarget, { closed: !s.is_closed }, s.is_closed ? 'Opened.' : 'Closed for booking.'));
+    $('[data-del]', el)?.addEventListener('click', async (ev) => { await busy(ev.currentTarget, () => api(`/api/admin/sessions/${id}`, { method: 'DELETE' })); close(); toast('Deleted.'); load(); });
+  });
+  await load();
+}
 
-const afterLogin = async (user) => {
-  if (user.role !== 'admin') {
-    await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
-    throw new Error('This account does not have admin access.');
-  }
-  setLoggedIn(user);
-  location.hash = '#/dashboard';
-};
-const auth = (mode) => authView(mode, { title: 'Admin login', subtitle: 'Manage appointments and check visitors in.', allowSignup: false, onSuccess: afterLogin });
+async function broadcastView(ctx) {
+  await ensureToday();
+  header('Send WhatsApp message', 'Tell everyone visiting on a day about a change of time, venue and so on.');
+  let date = today;
+  const render = async () => {
+    const [{ broadcasts }, { stats }] = await Promise.all([api(`/api/admin/broadcasts?date=${date}`), api(`/api/admin/appointments?date=${date}&status=approved`)]);
+    if (!ctx.isCurrent()) return;
+    ctx.el.innerHTML = `
+      <div class="card">
+        <label for="d" style="margin-top:0">Day</label><input id="d" type="date" value="${date}">
+        <p class="sub" style="margin-top:10px">${plural(stats.approved, 'confirmed visitor')} on this day (${plural(stats.people, 'person', 'people')}).</p>
+        <button class="btn block" data-new ${stats.approved ? '' : 'disabled'}>${icons.whatsapp} Write a message</button>
+      </div>
+      <div class="section-title">Sent for this day</div>
+      <div class="card flush">${broadcasts.length ? broadcasts.map((b) => `<div class="person" style="align-items:flex-start"><div class="grow"><div style="white-space:pre-wrap">${esc(b.body)}</div>
+        <div class="meta" style="margin-top:4px">To ${plural(b.recipients, 'visitor')}${b.period ? ` (${esc(config.periods[b.period].label)})` : ''} · by ${esc(b.sent_by_name)} · ${esc(formatWhen(b.created_at))}</div></div></div>`).join('') : '<div class="empty">No messages sent for this day.</div>'}</div>`;
+    $('#d', ctx.el).addEventListener('change', (e) => { date = e.target.value || today; render(); });
+    $('[data-new]', ctx.el).addEventListener('click', () => broadcastSheet(date));
+  };
+  await render();
+}
+
+async function adminsView(ctx) {
+  header('Admins', 'Admins log in with their WhatsApp number.');
+  const load = async () => {
+    const { admins } = await api('/api/admin/admins');
+    if (!ctx.isCurrent()) return;
+    ctx.el.innerHTML = `
+      <form class="card" id="add">
+        <h2>Add an admin</h2>
+        <label for="an">Name</label><input id="an" name="name" maxlength="80">
+        <label for="ap">WhatsApp number</label><div class="phone-field"><span>+91</span><input id="ap" name="phone" type="tel" inputmode="tel" maxlength="20" required></div>
+        <div class="actions"><button class="btn block" type="submit">${icons.plus} Add admin</button></div>
+      </form>
+      <div class="card flush">${admins.map((a) => `<div class="person">${photoTag(a.photo, a.name)}<div class="grow"><div class="name">${esc(a.name ?? 'Not logged in yet')}${a.id === user.id ? ' (you)' : ''}</div><div class="meta">${esc(formatPhone(a.phone))}</div></div>
+        ${a.id === user.id ? '' : `<button class="btn small danger" data-remove="${a.id}">Remove</button>`}</div>`).join('')}</div>`;
+    $('#add', ctx.el).addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await busy($('button', e.target), () => api('/api/admin/admins', { method: 'POST', body: { name: e.target.name.value, phone: e.target.phone.value } }));
+      toast('Admin added. They can now log in with their WhatsApp number.');
+      load();
+    });
+    ctx.el.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
+      if (!await confirmSheet({ title: 'Remove this admin?', confirm: 'Remove', danger: true })) return;
+      await busy(b, () => api(`/api/admin/admins/${b.dataset.remove}`, { method: 'DELETE' }));
+      load();
+    }));
+  };
+  await load();
+}
+
+async function outboxView(ctx) {
+  header('WhatsApp delivery', 'The latest messages sent by the app.');
+  const { messages } = await api('/api/admin/outbox');
+  if (!ctx.isCurrent()) return;
+  const chip = { sent: 'approved', failed: 'rejected', queued: 'pending', sending: 'pending', logged: 'hold' };
+  const word = { sent: 'Sent', failed: 'Failed', queued: 'Waiting', sending: 'Sending', logged: 'Not sent (WhatsApp not set up)' };
+  ctx.el.innerHTML = `<div class="card flush">${messages.length ? messages.map((m) => `<div class="person" style="align-items:flex-start"><div class="grow">
+    <div class="row" style="justify-content:space-between"><span class="name">${esc(formatPhone(m.recipient))}</span><span class="status ${chip[m.status]}">${esc(word[m.status])}</span></div>
+    <div class="small" style="margin-top:4px">${esc(m.preview)}</div>
+    <div class="meta">${esc(formatWhen(m.created_at))}${m.error ? ` · ${esc(m.error)}` : ''}</div></div></div>`).join('') : '<div class="empty">Nothing sent yet.</div>'}</div>`;
+}
+
+// ---- Boot -----------------------------------------------------------------------------
+
+function loginView(ctx) {
+  header('Admin', 'Log in with your WhatsApp number.');
+  renderLogin(ctx.el, { onDone: (u) => {
+    if (u.role !== 'admin') { location.href = homeFor(u); return; }
+    setUser(u);
+    location.hash = u.profileComplete ? '#/home' : '#/setup';
+  } });
+}
+
+function setupView(ctx) {
+  header('Welcome', 'Add your name and photo once.');
+  renderProfileSetup(ctx.el, user, { onDone: (u) => { setUser(u); location.hash = '#/home'; } });
+}
 
 const router = createRouter({
   outlet,
-  fallback: '#/dashboard',
+  fallback: '#/home',
   routes: [
-    { path: /^#\/login$/, view: auth('login'), public: true },
-    { path: /^#\/forgot$/, view: auth('forgot'), public: true },
-    { path: /^#\/reset\/([\w-]+)$/, view: auth('reset'), public: true },
-    { path: /^#\/dashboard$/, view: dashboardView, tab: 'dashboard' },
-    { path: /^#\/requests$/, view: requestsView, tab: 'requests' },
-    { path: /^#\/scan$/, view: scanView, tab: 'scan' },
-    { path: /^#\/messages$/, view: messagesView, tab: 'messages' },
-    { path: /^#\/messages\/(\d+)$/, view: threadView, tab: 'messages' },
-    { path: /^#\/manage$/, view: manageView, tab: 'manage' },
+    { path: /^#\/login$/, view: loginView, public: true },
+    { path: /^#\/setup$/, view: setupView, setup: true },
+    { path: /^#\/home$/, view: homeView, tab: 'home' },
+    { path: /^#\/requests(\?hold)?$/, view: requestsView, tab: 'requests' },
+    { path: /^#\/visitors$/, view: visitorsView, tab: 'visitors' },
+    { path: /^#\/security$/, view: securityView, tab: 'security' },
+    { path: /^#\/more$/, view: moreView, tab: 'more' },
+    { path: /^#\/sessions$/, view: sessionsView, tab: 'more' },
+    { path: /^#\/broadcast$/, view: broadcastView, tab: 'more' },
+    { path: /^#\/admins$/, view: adminsView, tab: 'more' },
+    { path: /^#\/outbox$/, view: outboxView, tab: 'more' },
   ],
-  guard: (route, hash) => {
-    if (route.public && me && !/reset/.test(hash)) return '#/dashboard';
-    if (!route.public && !me) return '#/login';
+  guard: (route) => {
+    if (!user) return route.public ? null : '#/login';
+    if (route.public) return '#/home';
+    if (!user.profileComplete && !route.setup) return '#/setup';
     return null;
   },
   onChange: (route) => $$('[data-tab]').forEach((a) => a.classList.toggle('on', a.dataset.tab === route.tab)),
 });
 
-const { user } = await api('/api/auth/me');
-setLoggedIn(user?.role === 'admin' ? user : null);
-router.run();
+[config, { user }] = await Promise.all([api('/api/config'), api('/api/auth/me')]);
+if (user && user.role !== 'admin') location.replace(homeFor(user));
+else {
+  setUser(user);
+  router.run();
+}

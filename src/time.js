@@ -56,3 +56,32 @@ export function formatSlot(slot) {
 
 export const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 export const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// ---- Visit sessions ----------------------------------------------------------
+
+export const PERIODS = ['morning', 'afternoon', 'evening'];
+export const PERIOD_LABELS = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening' };
+
+// "08:00-13:00,13:00-16:00,16:00-20:00" -> { morning: { start, end }, ... }
+export function parsePeriodTimes(spec = '08:00-13:00,13:00-16:00,16:00-20:00') {
+  const parts = spec.split(',').map((p) => p.trim().split('-'));
+  if (parts.length !== 3 || parts.some(([s, e]) => !TIME_RE.test(s ?? '') || !TIME_RE.test(e ?? '') || s >= e)) {
+    throw new Error(`SESSION_TIMES must look like 08:00-13:00,13:00-16:00,16:00-20:00 (got "${spec}")`);
+  }
+  return Object.fromEntries(PERIODS.map((p, i) => [p, { start: parts[i][0], end: parts[i][1], label: PERIOD_LABELS[p] }]));
+}
+
+// "13:00" -> "1:00 PM"
+export function formatClock(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+export function formatDay(date) {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-IN', {
+    weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC',
+  });
+}
+
+export const formatVisit = (a) => `${formatDay(a.date)} (${PERIOD_LABELS[a.period]})`;

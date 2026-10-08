@@ -1,313 +1,296 @@
 import express from 'express';
 import crypto from 'node:crypto';
 import { transaction } from '../db.js';
-import { requireAdmin, createUser, publicUser, validatePassword } from '../auth.js';
-import { HttpError, text, email as parseEmail, phone as parsePhone } from '../http.js';
-import { ACTIVE, APPOINTMENT_SELECT, getAppointment, appointmentView } from '../appointments.js';
-import {
-  nowInTimezone, minutesUntil, addDays, dayOfWeek, toHHMM, fromHHMM, formatSlot, DATE_RE, TIME_RE,
-} from '../time.js';
-import { openStream } from '../sse.js';
+import { requireAdmin, publicUser } from '../auth.js';
+import { HttpError, text, phone as parsePhone } from '../http.js';
+import { ACTIVE, APPOINTMENT_SELECT, getAppointment, viewsWithPeople } from '../appointments.js';
+import { nowInTimezone, minutesUntil, addDays, dayOfWeek, formatVisit, formatClock, formatDay, PERIODS, DATE_RE } from '../time.js';
 
-const STATUSES = ['pending', 'approved', 'rejected', 'cancelled'];
-
-export function adminRoutes({ db, notifier, config, now }) {
+export function adminRoutes({ db, notifier, config, now, jobs }) {
   const router = express.Router();
-  const { timeZone } = config;
+  const { timeZone, periods } = config;
   const today = () => nowInTimezone(timeZone, now()).date;
+  const dateParam = (v, fallback) => (DATE_RE.test(v ?? '') ? v : fallback);
   router.use(requireAdmin);
 
-  router.get('/stream', (req, res) => openStream(req, res, (stream) => notifier.addAdminStream(stream)));
+  // ---- Dashboard ----------------------------------------------------------------
 
-  // Badge counts for the admin navigation.
-  router.get('/summary', (_req, res) => {
-    res.json({
-      pending: db.prepare("SELECT COUNT(*) AS n FROM appointments WHERE status = 'pending'").get().n,
-      unreadMessages: db.prepare('SELECT COUNT(*) AS n FROM messages WHERE from_admin = 0 AND read_at IS NULL').get().n,
-    });
-  });
-
-  // ---- Live dashboard ----------------------------------------------------
-
-  router.get('/stats', (req, res) => {
+  router.get('/dashboard', (req, res) => {
     const t = today();
-    const from = DATE_RE.test(req.query.from ?? '') ? req.query.from : addDays(t, -6);
-    let to = DATE_RE.test(req.query.to ?? '') ? req.query.to : addDays(t, 13);
-    if (to < from) to = from;
-    if (addDays(from, 92) < to) to = addDays(from, 92);
+    const date = dateParam(req.query.date, t);
+    const perPeriod = db.prepare(`
+      SELECT s.period, s.capacity,
+        COUNT(a.id) AS bookings, COALESCE(SUM(a.people_count), 0) AS people,
+        COUNT(a.checked_in_at) AS checkedInBookings,
+        COALESCE(SUM(CASE WHEN a.checked_in_at IS NOT NULL THEN a.people_count END), 0) AS checkedInPeople
+      FROM visit_sessions s LEFT JOIN appointments a ON a.session_id = s.id AND a.status = 'approved'
+      WHERE s.date = ? GROUP BY s.id
+    `).all(date);
+    const byPeriod = new Map(perPeriod.map((p) => [p.period, p]));
+    const sessions = PERIODS.filter((p) => byPeriod.has(p)).map((p) => ({ period: p, label: periods[p].label, ...byPeriod.get(p) }));
+    const sum = (k) => sessions.reduce((n, s) => n + s[k], 0);
 
-    const rows = db.prepare(`
-      SELECT s.date,
-        COUNT(s.id) AS slots,
-        SUM(CASE WHEN s.is_blocked = 0 AND a.id IS NULL THEN 1 ELSE 0 END) AS open,
-        SUM(CASE WHEN a.status = 'pending' THEN 1 ELSE 0 END) AS pending,
-        SUM(CASE WHEN a.status = 'approved' THEN 1 ELSE 0 END) AS booked,
-        SUM(CASE WHEN a.status = 'approved' AND a.checked_in_at IS NOT NULL THEN 1 ELSE 0 END) AS checkedIn
-      FROM slots s
-      LEFT JOIN appointments a ON a.slot_id = s.id AND a.status IN ${ACTIVE}
-      WHERE s.date BETWEEN ? AND ?
-      GROUP BY s.date
-    `).all(from, to);
-    const byDate = new Map(rows.map((r) => [r.date, r]));
+    const counts = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM appointments WHERE status = 'pending' AND date >= ?) AS pending,
+        (SELECT COUNT(*) FROM appointments WHERE status = 'hold' AND date >= ?) AS hold,
+        (SELECT COUNT(*) FROM users WHERE role = 'security' AND status = 'pending' AND name IS NOT NULL AND photo IS NOT NULL) AS securityPending,
+        (SELECT COUNT(*) FROM users WHERE role = 'security' AND status = 'active') AS securityActive
+    `).get(t, t);
+
+    const recent = db.prepare(`${APPOINTMENT_SELECT} WHERE a.date = ? AND a.checked_in_at IS NOT NULL ORDER BY a.checked_in_at DESC LIMIT 12`).all(date);
+
+    const from = addDays(date, -6);
+    const to = addDays(date, 7);
+    const series = new Map(db.prepare(`
+      SELECT date, SUM(people_count) AS people, SUM(CASE WHEN checked_in_at IS NOT NULL THEN people_count ELSE 0 END) AS checkedIn
+      FROM appointments WHERE status = 'approved' AND date BETWEEN ? AND ? GROUP BY date
+    `).all(from, to).map((r) => [r.date, r]));
     const days = [];
-    for (let d = from; d <= to; d = addDays(d, 1)) {
-      const r = byDate.get(d);
-      days.push({ date: d, slots: r?.slots ?? 0, open: r?.open ?? 0, pending: r?.pending ?? 0, booked: r?.booked ?? 0, checkedIn: r?.checkedIn ?? 0 });
-    }
+    for (let d = from; d <= to; d = addDays(d, 1)) days.push({ date: d, people: series.get(d)?.people ?? 0, checkedIn: series.get(d)?.checkedIn ?? 0 });
 
-    const todayList = db.prepare(`${APPOINTMENT_SELECT} WHERE s.date = ? AND a.status = 'approved' ORDER BY s.start_time`)
-      .all(t).map(appointmentView);
-    const todayRow = byDate.get(t) ?? { booked: 0, checkedIn: 0, pending: 0, open: 0 };
     res.json({
-      today: t,
-      now: nowInTimezone(timeZone, now()).time,
+      date, today: t,
       summary: {
-        booked: todayRow.booked, checkedIn: todayRow.checkedIn, pending: todayRow.pending,
-        awaiting: todayRow.booked - todayRow.checkedIn, open: todayRow.open,
+        bookings: sum('bookings'), people: sum('people'), checkedInBookings: sum('checkedInBookings'),
+        checkedInPeople: sum('checkedInPeople'), remainingPeople: sum('people') - sum('checkedInPeople'), capacity: sum('capacity'),
+        ...counts,
       },
+      sessions,
+      recent: viewsWithPeople(db, recent),
       days,
-      todayList,
     });
   });
 
-  // ---- Requests ----------------------------------------------------------
+  // ---- Appointments ------------------------------------------------------------------
 
+  // ?status=pending|hold  -> upcoming requests across all dates
+  // ?date=YYYY-MM-DD      -> everything on that day (filter with status, period, checked, q)
   router.get('/appointments', (req, res) => {
-    const status = STATUSES.includes(req.query.status) ? req.query.status : null;
+    const where = [];
+    const args = [];
+    const { status, period, checked } = req.query;
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (DATE_RE.test(req.query.date ?? '')) { where.push('a.date = ?'); args.push(req.query.date); }
+    else { where.push('a.date >= ?'); args.push(today()); }
+    if (['pending', 'hold', 'approved', 'rejected', 'cancelled'].includes(status)) { where.push('a.status = ?'); args.push(status); }
+    if (PERIODS.includes(period)) { where.push('a.period = ?'); args.push(period); }
+    if (checked === 'in') where.push("a.status = 'approved' AND a.checked_in_at IS NOT NULL");
+    if (checked === 'out') where.push("a.status = 'approved' AND a.checked_in_at IS NULL");
+    if (q) {
+      const digits = q.replace(/\D/g, '');
+      where.push(`(a.name LIKE ? OR a.reference LIKE ?${digits.length >= 3 ? ' OR a.id IN (SELECT appointment_id FROM appointment_people WHERE phone LIKE ?)' : ''} OR a.id IN (SELECT appointment_id FROM appointment_people WHERE name LIKE ?))`);
+      args.push(`%${q}%`, `%${q}%`, ...(digits.length >= 3 ? [`%${digits}%`] : []), `%${q}%`);
+    }
     const rows = db.prepare(`
-      ${APPOINTMENT_SELECT}
-      ${status ? 'WHERE a.status = ?' : ''}
-      ORDER BY CASE a.status WHEN 'pending' THEN 0 ELSE 1 END, s.date, s.start_time
-      LIMIT 500
-    `).all(...(status ? [status] : []));
-    const counts = Object.fromEntries(
-      db.prepare('SELECT status, COUNT(*) AS n FROM appointments GROUP BY status').all().map((r) => [r.status, r.n])
-    );
-    res.json({ appointments: rows.map(appointmentView), counts });
+      ${APPOINTMENT_SELECT} WHERE ${where.join(' AND ')}
+      ORDER BY a.date, CASE a.period WHEN 'morning' THEN 0 WHEN 'afternoon' THEN 1 ELSE 2 END, a.checked_in_at IS NOT NULL, a.id
+      LIMIT 1000
+    `).all(...args);
+
+    let stats = null;
+    if (DATE_RE.test(req.query.date ?? '')) {
+      stats = db.prepare(`
+        SELECT
+          SUM(status = 'approved') AS approved, SUM(status = 'pending') AS pending, SUM(status = 'hold') AS hold,
+          COALESCE(SUM(CASE WHEN status = 'approved' THEN people_count END), 0) AS people,
+          SUM(status = 'approved' AND checked_in_at IS NOT NULL) AS checkedIn,
+          COALESCE(SUM(CASE WHEN status = 'approved' AND checked_in_at IS NOT NULL THEN people_count END), 0) AS checkedInPeople
+        FROM appointments WHERE date = ?
+      `).get(req.query.date);
+      for (const k in stats) stats[k] ??= 0;
+      stats.remaining = stats.approved - stats.checkedIn;
+      stats.remainingPeople = stats.people - stats.checkedInPeople;
+    }
+    res.json({ appointments: viewsWithPeople(db, rows), stats });
   });
 
-  function decide(req, res, status) {
+  function review(req, res, status) {
     const appt = getAppointment(db, Number(req.params.id));
     if (!appt) throw new HttpError(404, 'Appointment not found');
-    const allowed = status === 'cancelled' ? ['approved', 'pending'] : ['pending'];
-    if (!allowed.includes(appt.status)) throw new HttpError(409, `Appointment is already ${appt.status}`);
-    if (appt.checked_in_at) throw new HttpError(409, 'This visitor has already checked in');
-    const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 1000) || null : null;
+    const allowed = { approved: ['pending', 'hold'], hold: ['pending'], rejected: ['pending', 'hold'], cancelled: ['approved', 'pending', 'hold'] }[status];
+    if (!allowed.includes(appt.status)) throw new HttpError(409, `This appointment is already ${appt.status === 'hold' ? 'on hold' : appt.status}.`);
+    if (appt.checked_in_at) throw new HttpError(409, 'This visitor has already checked in.');
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) || null : null;
 
-    // Skip reminders that would otherwise fire right after a late approval.
-    const minsAway = minutesUntil(appt.date, appt.start_time, timeZone, now());
+    const t = today();
+    const tomorrow = addDays(t, 1);
     const approved = status === 'approved';
+    // A late approval already says everything the earlier reminders would.
+    const skipReminder = approved && (appt.date === t || (appt.date === tomorrow && nowInTimezone(timeZone, now()).time >= config.reminderTime));
+    const skipGreeting = approved && appt.date === t;
     db.prepare(`
-      UPDATE appointments SET status = ?, admin_note = ?, updated_at = datetime('now'),
-        checkin_code = COALESCE(checkin_code, ?),
-        reminded_24h = reminded_24h OR ?, reminded_1h = reminded_1h OR ?, reminded_qr = reminded_qr OR ?
+      UPDATE appointments SET status = ?, admin_note = COALESCE(?, admin_note), reviewed_by = ?, updated_at = datetime('now'),
+        checkin_code = CASE WHEN ? THEN COALESCE(checkin_code, ?) ELSE checkin_code END,
+        reminded_day_before = reminded_day_before OR ?, greeted = greeted OR ?
       WHERE id = ?
-    `).run(status, note, approved ? crypto.randomBytes(18).toString('base64url') : null,
-      approved && minsAway <= 24 * 60 ? 1 : 0, approved && minsAway <= 60 ? 1 : 0,
-      approved && minsAway <= config.qrLeadMinutes ? 1 : 0, appt.id);
+    `).run(status, note, req.user.id, approved ? 1 : 0, crypto.randomBytes(18).toString('base64url'), skipReminder ? 1 : 0, skipGreeting ? 1 : 0, appt.id);
 
-    const when = formatSlot(appt);
+    const when = formatVisit(appt);
+    const opens = formatClock(periods[appt.period].start);
     const suffix = note ? `\nNote: ${note}` : '';
     const messages = {
-      approved: ['Appointment confirmed 🙏', `Your meeting with Gurudev is confirmed for ${when}. Your entry QR code will appear in the app ${config.qrLeadMinutes} minutes before your meeting — please show it at the entrance.${suffix}`],
-      rejected: ['Appointment request declined', `We're sorry, your request for ${when} could not be accommodated.${suffix}`],
+      approved: ['Appointment confirmed ✅', `Your meeting with Gurudev is confirmed for ${when} for ${appt.people_count} ${appt.people_count === 1 ? 'person' : 'people'}. Your QR entry pass will be sent on WhatsApp on ${formatDay(appt.date)} at ${opens}.${suffix}`],
+      rejected: ['Appointment request declined', `We are sorry, your request for ${when} could not be accommodated.${suffix}`],
       cancelled: ['Appointment cancelled', `Your appointment on ${when} has been cancelled by the ashram.${suffix}`],
     };
-    notifier.notify(appt.user_id, appt.id, ...messages[status]);
-    notifier.emitToAdmins('appointment', { id: appt.id });
-    res.json({ appointment: appointmentView(getAppointment(db, appt.id)) });
+    if (messages[status]) notifier.notify(appt.user_id, appt.id, ...messages[status], { phone: appt.phone });
+    notifier.emitToStaff('appointment', { id: appt.id });
+    if (approved) jobs?.runSoon();
+    res.json({ appointment: viewsWithPeople(db, [getAppointment(db, appt.id)])[0] });
   }
 
-  router.post('/appointments/:id/approve', (req, res) => decide(req, res, 'approved'));
-  router.post('/appointments/:id/reject', (req, res) => decide(req, res, 'rejected'));
-  router.post('/appointments/:id/cancel', (req, res) => decide(req, res, 'cancelled'));
+  router.post('/appointments/:id/approve', (req, res) => review(req, res, 'approved'));
+  router.post('/appointments/:id/hold', (req, res) => review(req, res, 'hold'));
+  router.post('/appointments/:id/reject', (req, res) => review(req, res, 'rejected'));
+  router.post('/appointments/:id/cancel', (req, res) => review(req, res, 'cancelled'));
 
-  // ---- Check-in ----------------------------------------------------------
+  // ---- WhatsApp message to everyone visiting on a day ---------------------------------
 
-  // Whether the visitor can be admitted now. Timing problems can be
-  // overridden by the admin at the door; status problems cannot.
-  function eligibility(appt) {
-    if (appt.status !== 'approved') return { canAdmit: false, reason: `This appointment is ${appt.status}.` };
-    if (appt.checked_in_at) return { canAdmit: false, reason: 'Already checked in.' };
-    if (appt.date !== today()) return { canAdmit: true, needsOverride: true, reason: `This pass is for ${formatSlot(appt)}, not today.` };
-    const toStart = minutesUntil(appt.date, appt.start_time, timeZone, now());
-    const toEnd = minutesUntil(appt.date, appt.end_time, timeZone, now());
-    if (toStart > config.checkinEarlyMinutes) return { canAdmit: true, needsOverride: true, reason: `Early: the meeting starts at ${appt.start_time}.` };
-    if (toEnd < -config.checkinGraceMinutes) return { canAdmit: true, needsOverride: true, reason: `Late: the slot ended at ${appt.end_time}.` };
-    return { canAdmit: true, needsOverride: false };
+  router.post('/broadcast', (req, res) => {
+    const date = dateParam(req.body?.date, null);
+    if (!date) throw new HttpError(400, 'Please choose a date');
+    const period = PERIODS.includes(req.body?.period) ? req.body.period : null;
+    const message = text(req.body?.message, 'the message', 600);
+    const rows = db.prepare(`SELECT * FROM appointments WHERE date = ? AND status = 'approved' ${period ? 'AND period = ?' : ''}`)
+      .all(...[date, period].filter(Boolean));
+    if (!rows.length) throw new HttpError(400, 'There are no confirmed visitors for this day.');
+    for (const a of rows) notifier.notify(a.user_id, a.id, 'Message from the ashram', message, { phone: a.phone, kind: 'broadcast' });
+    db.prepare('INSERT INTO broadcasts (date, period, body, recipients, sent_by) VALUES (?, ?, ?, ?, ?)').run(date, period, message, rows.length, req.user.id);
+    res.json({ recipients: rows.length });
+  });
+
+  router.get('/broadcasts', (req, res) => {
+    const date = dateParam(req.query.date, today());
+    res.json({ broadcasts: db.prepare(`
+      SELECT b.*, u.name AS sent_by_name FROM broadcasts b JOIN users u ON u.id = b.sent_by WHERE b.date = ? ORDER BY b.id DESC
+    `).all(date) });
+  });
+
+  // ---- Security staff ------------------------------------------------------------------
+
+  const staffView = (u) => ({ ...publicUser(u), createdAt: u.created_at, reviewedBy: u.reviewed_by_name ?? null, checkinsToday: u.checkins_today ?? 0 });
+
+  router.get('/security', (req, res) => {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    const digits = q.replace(/\D/g, '');
+    const rows = db.prepare(`
+      SELECT u.*, r.name AS reviewed_by_name,
+        (SELECT COUNT(*) FROM appointments a WHERE a.checked_in_by = u.id AND a.date = ?) AS checkins_today
+      FROM users u LEFT JOIN users r ON r.id = u.reviewed_by
+      WHERE u.role = 'security' AND u.name IS NOT NULL AND u.photo IS NOT NULL
+      ${q ? `AND (u.name LIKE ?${digits ? ' OR u.phone LIKE ?' : ''})` : ''}
+      ORDER BY CASE u.status WHEN 'pending' THEN 0 WHEN 'active' THEN 1 ELSE 2 END, u.name
+    `).all(today(), ...(q ? [`%${q}%`, ...(digits ? [`%${digits}%`] : [])] : []));
+    res.json({ staff: rows.map(staffView) });
+  });
+
+  function setSecurity(req, res, status) {
+    const u = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'security'").get(Number(req.params.id));
+    if (!u) throw new HttpError(404, 'Security staff member not found');
+    db.prepare("UPDATE users SET status = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(status, req.user.id, u.id);
+    const msg = {
+      active: ['Scanner access approved ✅', 'You can now open the app and scan visitor passes.'],
+      revoked: ['Scanner access removed', 'Your access to the visitor scanner has been removed by the admin.'],
+      rejected: ['Security registration not approved', 'Your request for scanner access was not approved.'],
+    }[status];
+    notifier.notify(u.id, null, ...msg, { path: '' });
+    notifier.emitToUser(u.id, 'status', { status });
+    notifier.emitToStaff('security');
+    res.json({ staff: staffView({ ...u, status }) });
   }
+  router.post('/security/:id/approve', (req, res) => setSecurity(req, res, 'active'));
+  router.post('/security/:id/revoke', (req, res) => setSecurity(req, res, 'revoked'));
+  router.post('/security/:id/reject', (req, res) => setSecurity(req, res, 'rejected'));
 
-  function findForCheckin(body) {
-    let appt;
-    if (body?.code) {
-      const code = String(body.code).trim();
-      const row = db.prepare('SELECT id FROM appointments WHERE checkin_code = ?').get(code);
-      appt = row && getAppointment(db, row.id);
-      if (!appt) throw new HttpError(404, 'This QR code is not a valid entry pass.');
-    } else {
-      appt = getAppointment(db, Number(body?.appointmentId));
-      if (!appt) throw new HttpError(404, 'Appointment not found');
-    }
-    return appt;
-  }
-
-  router.post('/checkin/lookup', (req, res) => {
-    const appt = findForCheckin(req.body);
-    res.json({ appointment: appointmentView(appt), ...eligibility(appt) });
-  });
-
-  router.post('/checkin', (req, res) => {
-    const appt = findForCheckin(req.body);
-    const check = eligibility(appt);
-    if (!check.canAdmit) throw new HttpError(409, check.reason);
-    if (check.needsOverride && !req.body?.override) throw new HttpError(409, check.reason);
-    const { changes } = db.prepare(`
-      UPDATE appointments SET checked_in_at = datetime('now'), checked_in_by = ?, updated_at = datetime('now')
-      WHERE id = ? AND status = 'approved' AND checked_in_at IS NULL
-    `).run(req.user.id, appt.id);
-    if (!changes) throw new HttpError(409, 'Already checked in.');
-    notifier.notify(appt.user_id, appt.id, 'Welcome 🙏', "You're checked in. Please take a seat; you'll be called shortly.",
-      { email: false, whatsapp: false });
-    notifier.emitToAdmins('checkin', { id: appt.id });
-    res.json({ appointment: appointmentView(getAppointment(db, appt.id)) });
-  });
-
-  // ---- Slots -------------------------------------------------------------
-
-  router.get('/slots', (req, res) => {
-    const from = DATE_RE.test(req.query.from ?? '') ? req.query.from : today();
-    const slots = db.prepare(`
-      SELECT s.*, a.id AS appointment_id, a.status AS appointment_status, a.name AS visitor_name, a.checked_in_at
-      FROM slots s
-      LEFT JOIN appointments a ON a.slot_id = s.id AND a.status IN ${ACTIVE}
-      WHERE s.date >= ?
-      ORDER BY s.date, s.start_time
-      LIMIT 1000
-    `).all(from);
-    res.json({ slots });
-  });
-
-  // Creates slots for every matching day in [fromDate, toDate] between
-  // startTime and endTime, each `duration` minutes long with `gap` minutes between.
-  router.post('/slots', (req, res) => {
-    const { fromDate, toDate = fromDate, startTime, endTime } = req.body ?? {};
-    const duration = Number(req.body?.duration ?? 15);
-    const gap = Number(req.body?.gap ?? 0);
-    const weekdays = Array.isArray(req.body?.weekdays) ? req.body.weekdays.map(Number) : [0, 1, 2, 3, 4, 5, 6];
-    if (!DATE_RE.test(fromDate ?? '') || !DATE_RE.test(toDate ?? '')) throw new HttpError(400, 'Valid dates are required');
-    if (!TIME_RE.test(startTime ?? '') || !TIME_RE.test(endTime ?? '')) throw new HttpError(400, 'Valid start and end times are required');
-    if (toDate < fromDate) throw new HttpError(400, 'End date must not be before start date');
-    if (addDays(fromDate, 366) < toDate) throw new HttpError(400, 'Date range can be at most one year');
-    if (!Number.isInteger(duration) || duration < 5 || duration > 480) throw new HttpError(400, 'Duration must be 5–480 minutes');
-    if (!Number.isInteger(gap) || gap < 0 || gap > 240) throw new HttpError(400, 'Gap must be 0–240 minutes');
-    const start = fromHHMM(startTime);
-    const end = fromHHMM(endTime);
-    if (end - start < duration) throw new HttpError(400, 'End time must leave room for at least one slot');
-
-    const insert = db.prepare('INSERT OR IGNORE INTO slots (date, start_time, end_time) VALUES (?, ?, ?)');
-    let created = 0;
-    let skipped = 0;
-    transaction(db, () => {
-      for (let date = fromDate; date <= toDate; date = addDays(date, 1)) {
-        if (!weekdays.includes(dayOfWeek(date))) continue;
-        for (let t = start; t + duration <= end; t += duration + gap) {
-          const { changes } = insert.run(date, toHHMM(t), toHHMM(t + duration));
-          changes ? created++ : skipped++;
-        }
-      }
-    });
-    notifier.emitToAdmins('slots');
-    res.status(201).json({ created, skipped });
-  });
-
-  router.patch('/slots/:id', (req, res) => {
-    const slot = db.prepare('SELECT * FROM slots WHERE id = ?').get(Number(req.params.id));
-    if (!slot) throw new HttpError(404, 'Slot not found');
-    db.prepare('UPDATE slots SET is_blocked = ? WHERE id = ?').run(req.body?.blocked ? 1 : 0, slot.id);
-    notifier.emitToAdmins('slots');
-    res.json({ slot: db.prepare('SELECT * FROM slots WHERE id = ?').get(slot.id) });
-  });
-
-  router.delete('/slots/:id', (req, res) => {
-    const id = Number(req.params.id);
-    if (!db.prepare('SELECT 1 FROM slots WHERE id = ?').get(id)) throw new HttpError(404, 'Slot not found');
-    if (db.prepare('SELECT 1 FROM appointments WHERE slot_id = ?').get(id)) {
-      throw new HttpError(409, 'This slot has appointment history. Block it instead of deleting it.');
-    }
-    db.prepare('DELETE FROM slots WHERE id = ?').run(id);
-    notifier.emitToAdmins('slots');
-    res.json({ ok: true });
-  });
-
-  // ---- Messages ----------------------------------------------------------
-
-  router.get('/threads', (_req, res) => {
-    const threads = db.prepare(`
-      SELECT u.id AS user_id, u.name, u.phone, u.email, m.body AS last_body, m.from_admin AS last_from_admin,
-        m.created_at AS last_at,
-        (SELECT COUNT(*) FROM messages x WHERE x.user_id = u.id AND x.from_admin = 0 AND x.read_at IS NULL) AS unread
-      FROM messages m JOIN users u ON u.id = m.user_id
-      WHERE m.id = (SELECT MAX(id) FROM messages y WHERE y.user_id = m.user_id)
-      ORDER BY m.id DESC
-    `).all();
-    res.json({ threads });
-  });
-
-  router.get('/threads/:userId', (req, res) => {
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(req.params.userId));
-    if (!user) throw new HttpError(404, 'User not found');
-    db.prepare("UPDATE messages SET read_at = datetime('now') WHERE user_id = ? AND from_admin = 0 AND read_at IS NULL").run(user.id);
-    const messages = db.prepare(`
-      SELECT m.id, m.body, m.from_admin, m.created_at, s.name AS sender_name
-      FROM messages m JOIN users s ON s.id = m.sender_id WHERE m.user_id = ? ORDER BY m.id
-    `).all(user.id);
-    const appointments = db.prepare(`${APPOINTMENT_SELECT} WHERE a.user_id = ? ORDER BY s.date DESC LIMIT 10`).all(user.id).map(appointmentView);
-    res.json({ user: publicUser(user), messages, appointments });
-  });
-
-  router.post('/threads/:userId', (req, res) => {
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(req.params.userId));
-    if (!user) throw new HttpError(404, 'User not found');
-    const body = text(req.body?.body, 'Message', 2000);
-    const { lastInsertRowid } = db.prepare('INSERT INTO messages (user_id, sender_id, from_admin, body) VALUES (?, ?, 1, ?)')
-      .run(user.id, req.user.id, body);
-    notifier.notify(user.id, null, 'New message from the ashram', body, { path: '#/contact', whatsapp: false });
-    notifier.emitToUser(user.id, 'message', {});
-    notifier.emitToAdmins('message', { userId: user.id });
-    res.status(201).json({ message: db.prepare('SELECT id, body, from_admin, created_at FROM messages WHERE id = ?').get(lastInsertRowid) });
-  });
-
-  // ---- Admin accounts ----------------------------------------------------
+  // ---- Admin accounts -----------------------------------------------------------------
 
   router.get('/admins', (_req, res) => {
     res.json({ admins: db.prepare("SELECT * FROM users WHERE role = 'admin' ORDER BY name").all().map(publicUser) });
   });
 
-  // Adds a new admin, or promotes an existing account with that email.
+  // Adds an admin by WhatsApp number. They log in with a code like everyone else.
   router.post('/admins', (req, res) => {
-    const email = parseEmail(req.body?.email);
-    const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-    if (existing) {
-      db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(existing.id);
-      return res.json({ admin: publicUser({ ...existing, role: 'admin' }), promoted: true });
-    }
-    const user = createUser(db, {
-      name: text(req.body?.name, 'Name', 100),
-      email,
-      phone: parsePhone(req.body?.phone, config.defaultCountryCode),
-      password: validatePassword(req.body?.password),
-      role: 'admin',
-    });
-    res.status(201).json({ admin: publicUser(user), promoted: false });
+    const phone = parsePhone(req.body?.phone, config.defaultCountryCode);
+    const name = text(req.body?.name, 'their name', 80, { required: false }) || null;
+    const user = db.prepare(`
+      INSERT INTO users (phone, name, role, status) VALUES (?, ?, 'admin', 'active')
+      ON CONFLICT(phone) DO UPDATE SET role = 'admin', status = 'active', name = COALESCE(users.name, excluded.name)
+      RETURNING *
+    `).get(phone, name);
+    res.json({ admin: publicUser(user) });
   });
 
   router.delete('/admins/:id', (req, res) => {
     const id = Number(req.params.id);
     if (id === req.user.id) throw new HttpError(400, "You can't remove your own admin access");
-    const { changes } = db.prepare("UPDATE users SET role = 'visitor' WHERE id = ? AND role = 'admin'").run(id);
-    if (!changes) throw new HttpError(404, 'Admin not found');
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+    const done = db.prepare("UPDATE users SET role = 'visitor' WHERE id = ? AND role = 'admin' RETURNING id").get(id);
+    if (!done) throw new HttpError(404, 'Admin not found');
+    db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
     res.json({ ok: true });
+  });
+
+  // ---- Visit sessions (which days are open, and how many people) ------------------------
+
+  router.get('/sessions', (req, res) => {
+    const from = dateParam(req.query.from, today());
+    const to = dateParam(req.query.to, addDays(from, 30));
+    const sessions = db.prepare(`
+      SELECT s.*, COALESCE(SUM(a.people_count), 0) AS booked, COUNT(a.id) AS bookings
+      FROM visit_sessions s LEFT JOIN appointments a ON a.session_id = s.id AND a.status IN ${ACTIVE}
+      WHERE s.date BETWEEN ? AND ? GROUP BY s.id
+      ORDER BY s.date, CASE s.period WHEN 'morning' THEN 0 WHEN 'afternoon' THEN 1 ELSE 2 END
+    `).all(from, to).map((s) => ({ ...s, label: periods[s.period].label }));
+    res.json({ sessions });
+  });
+
+  router.post('/sessions', (req, res) => {
+    const fromDate = dateParam(req.body?.fromDate, null);
+    const toDate = dateParam(req.body?.toDate ?? req.body?.fromDate, null);
+    if (!fromDate || !toDate) throw new HttpError(400, 'Please choose the dates');
+    if (toDate < fromDate) throw new HttpError(400, 'The end date must be after the start date');
+    if (addDays(fromDate, 366) < toDate) throw new HttpError(400, 'Please choose at most one year at a time');
+    const chosen = (Array.isArray(req.body?.periods) ? req.body.periods : []).filter((p) => PERIODS.includes(p));
+    if (!chosen.length) throw new HttpError(400, 'Please choose Morning, Afternoon or Evening');
+    const capacity = Number(req.body?.capacity);
+    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 10000) throw new HttpError(400, 'Please enter how many people each session can take');
+    const weekdays = Array.isArray(req.body?.weekdays) ? req.body.weekdays.map(Number) : [0, 1, 2, 3, 4, 5, 6];
+    const insert = db.prepare('INSERT OR IGNORE INTO visit_sessions (date, period, capacity) VALUES (?, ?, ?)');
+    let created = 0;
+    let skipped = 0;
+    transaction(db, () => {
+      for (let d = fromDate; d <= toDate; d = addDays(d, 1)) {
+        if (!weekdays.includes(dayOfWeek(d))) continue;
+        for (const p of chosen) insert.run(d, p, capacity).changes ? created++ : skipped++;
+      }
+    });
+    notifier.emitToStaff('sessions');
+    res.status(201).json({ created, skipped });
+  });
+
+  router.patch('/sessions/:id', (req, res) => {
+    const s = db.prepare('SELECT * FROM visit_sessions WHERE id = ?').get(Number(req.params.id));
+    if (!s) throw new HttpError(404, 'Session not found');
+    const capacity = req.body?.capacity === undefined ? s.capacity : Number(req.body.capacity);
+    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 10000) throw new HttpError(400, 'Please enter how many people this session can take');
+    const closed = req.body?.closed === undefined ? s.is_closed : req.body.closed ? 1 : 0;
+    const updated = db.prepare('UPDATE visit_sessions SET capacity = ?, is_closed = ? WHERE id = ? RETURNING *').get(capacity, closed, s.id);
+    notifier.emitToStaff('sessions');
+    res.json({ session: updated });
+  });
+
+  router.delete('/sessions/:id', (req, res) => {
+    const id = Number(req.params.id);
+    if (db.prepare('SELECT 1 FROM appointments WHERE session_id = ?').get(id)) throw new HttpError(409, 'This session has bookings. Close it instead of deleting it.');
+    if (!db.prepare('DELETE FROM visit_sessions WHERE id = ? RETURNING id').get(id)) throw new HttpError(404, 'Session not found');
+    notifier.emitToStaff('sessions');
+    res.json({ ok: true });
+  });
+
+  // ---- WhatsApp delivery log ----------------------------------------------------------
+
+  router.get('/outbox', (_req, res) => {
+    res.json({ messages: db.prepare('SELECT id, kind, recipient, preview, status, error, created_at, sent_at FROM outbound_messages ORDER BY id DESC LIMIT 100').all() });
   });
 
   return router;

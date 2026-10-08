@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Admin · Meet Gurudev</title>
+  <title>Security · Meet Gurudev</title>
   <meta name="robots" content="noindex">
   <meta name="theme-color" content="#0a2357">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -12,24 +12,16 @@
   <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body class="no-nav">
-  <header class="hero" id="hero">
+  <header class="hero short" id="hero">
     <div class="bar">
-      <a class="brand" href="#/home"><img src="/icon.svg" alt="">Admin</a>
+      <a class="brand" href="#/scan"><img src="/icon.svg" alt="">Security</a>
       <span class="live off hidden" id="live">Live</span>
-      <a class="avatar-btn hidden" id="me" href="#/more" aria-label="More"></a>
+      <button class="avatar-btn hidden" id="me" aria-label="My account"></button>
     </div>
-    <h1 id="title">Admin</h1>
+    <h1 id="title">Security</h1>
     <p id="subtitle"></p>
-    <div id="heroExtra"></div>
   </header>
   <main id="app"><div class="card"><div class="spinner"></div></div></main>
-  <nav class="tabbar hidden" id="tabbar" aria-label="Main"><div class="inner">
-    <a href="#/home" data-tab="home"></a>
-    <a href="#/requests" data-tab="requests"></a>
-    <a href="#/visitors" data-tab="visitors"></a>
-    <a href="#/security" data-tab="security"></a>
-    <a href="#/more" data-tab="more"></a>
-  </div></nav>
-  <script type="module" src="/js/admin.js"></script>
+  <script type="module" src="/js/security.js"></script>
 </body>
 </html>
