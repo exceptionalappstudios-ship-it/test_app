@@ -1,6 +1,6 @@
 import express from 'express';
 import QRCode from 'qrcode';
-import { transaction } from '../db.js';
+import { transaction, getSetting } from '../db.js';
 import { requireUser, requireProfile } from '../auth.js';
 import { HttpError, text, phone as parsePhone, normalizePhone } from '../http.js';
 import {
@@ -34,7 +34,12 @@ export function visitorRoutes({ db, notifier, config, now }) {
 
   // Dates with their morning / afternoon / evening sessions. No times are shown
   // to visitors, only whether a session still has room.
+  const bookingsClosed = () => (getSetting(db, 'bookings_open') === '0'
+    ? { closed: true, closedMessage: getSetting(db, 'bookings_closed_message') || 'New bookings are closed right now. Please check again later.' } : null);
+
   router.get('/availability', (req, res) => {
+    const closed = bookingsClosed();
+    if (closed) return res.json({ days: [], ...closed });
     const t = today();
     const from = DATE_RE.test(req.query.from ?? '') && req.query.from > t ? req.query.from : t;
     const to = addDays(from, 60);
@@ -105,6 +110,9 @@ export function visitorRoutes({ db, notifier, config, now }) {
     if (!purposes.length) throw new HttpError(400, 'Please choose the purpose of your meeting');
     const description = text(body.description, 'a few words about your visit', 500, { required: purposes.includes('other') });
     const { passPhone, count, people } = parsePeople(body, user);
+
+    const closed = bookingsClosed();
+    if (closed) throw new HttpError(409, closed.closedMessage);
 
     const appointmentId = transaction(db, () => {
       const mine = db.prepare(`SELECT date, period FROM appointments WHERE user_id = ? AND status IN ${ACTIVE} AND date >= ?`).get(user.id, today());

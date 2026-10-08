@@ -90,7 +90,12 @@ const booking = (sessionIdValue, extra = {}) => ({
 
 test('logging in with a WhatsApp code creates an account that must add name and photo', async () => {
   const c = client();
-  const req = await c('/api/auth/otp/request', { method: 'POST', body: { phone: '098765 43210' } });
+  for (const bad of ['98765 4321', '098765 43210', '987654321012', '+1 98765 43210']) {
+    const r = await c('/api/auth/otp/request', { method: 'POST', body: { phone: bad } });
+    assert.equal(r.status, 400, bad);
+    assert.match(r.body.error, /10 digits/);
+  }
+  const req = await c('/api/auth/otp/request', { method: 'POST', body: { phone: '98765 43210' } });
   assert.deepEqual([req.body.phone, req.body.isNew, req.body.testCode], ['+919876543210', true, undefined]);
   await flush();
   const otp = sent.at(-1).body;
@@ -208,6 +213,28 @@ test('booking asks for reference, people, purposes and checks everyone has only 
   // After cancelling, the numbers are free again.
   await v(`/api/me/appointments/${appt.id}/cancel`, { method: 'POST' });
   assert.equal((await meera('/api/appointments', { method: 'POST', body: booking(sid) })).status, 201);
+});
+
+test('admins can stop all bookings, close a day, and change slots', async () => {
+  const a = await admin();
+  await openSessions(a);
+  const v = await visitor();
+  assert.deepEqual((await a('/api/admin/booking-status')).body, { open: true, message: '' });
+  await a('/api/admin/booking-status', { method: 'POST', body: { open: false, message: 'Bookings reopen on Monday.' } });
+  const closed = (await client()('/api/availability')).body;
+  assert.deepEqual([closed.closed, closed.closedMessage, closed.days.length], [true, 'Bookings reopen on Monday.', 0]);
+  const sid = db.prepare("SELECT id FROM visit_sessions WHERE date = '2030-01-11' AND period = 'morning'").get().id;
+  const refused = await v('/api/appointments', { method: 'POST', body: booking(sid) });
+  assert.deepEqual([refused.status, refused.body.error], [409, 'Bookings reopen on Monday.']);
+  await a('/api/admin/booking-status', { method: 'POST', body: { open: true } });
+
+  assert.equal((await a('/api/admin/sessions/day', { method: 'POST', body: { date: '2030-01-11', closed: true } })).body.updated, 3);
+  assert.equal((await client()('/api/availability')).body.days.some((d) => d.date === '2030-01-11'), false);
+  await a('/api/admin/sessions/day', { method: 'POST', body: { date: '2030-01-11', closed: false } });
+  await a(`/api/admin/sessions/${sid}`, { method: 'PATCH', body: { capacity: 2 } });
+  const morning = (await client()('/api/availability')).body.days.find((d) => d.date === '2030-01-11').sessions.find((x) => x.period === 'morning');
+  assert.equal(morning.remaining, 2);
+  assert.equal((await v('/api/appointments', { method: 'POST', body: booking(sid, { peopleCount: 3, people: [{ name: 'A', phone: '9700000001' }, { name: 'B', phone: '9700000002' }] }) })).status, 409);
 });
 
 test('sessions fill up by number of people', async () => {

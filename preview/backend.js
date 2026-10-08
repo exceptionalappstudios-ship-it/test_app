@@ -175,11 +175,13 @@ function text(v, field, max, { required = true } = {}) {
 function normalizePhone(v) {
   const raw = typeof v === 'string' ? v.trim() : '';
   if (!raw || !/^\+?[\d\s()-]+$/.test(raw)) return null;
-  let d = raw.replace(/\D/g, '');
-  if (!raw.startsWith('+')) { d = d.replace(/^0+/, ''); if (d.length <= 10) d = `91${d}`; }
-  return d.length < 10 || d.length > 15 ? null : `+${d}`;
+  const d = raw.replace(/\D/g, '');
+  if (d.length === 10) return `+91${d}`;
+  if (raw.startsWith('+') && d.length === 12 && d.startsWith('91')) return `+${d}`;
+  return null;
 }
-const phone = (v, field = 'a valid WhatsApp number') => { const p = normalizePhone(v); if (!p) throw new HttpError(400, `Please enter ${field}`); return p; };
+const phone = (v, field = 'a valid WhatsApp number') => { const p = normalizePhone(v); if (!p) throw new HttpError(400, `Please enter ${field} (10 digits)`); return p; };
+const closedInfo = () => (db.bookingsOpen === false ? { closed: true, closedMessage: db.closedMessage || 'New bookings are closed right now. Please check again later.' } : null);
 
 function conflictsFor(phones, self) {
   const out = [];
@@ -247,6 +249,7 @@ on('POST', '/api/auth/me/photo', ({ user, body }) => {
 }, 'user');
 
 on('GET', '/api/availability', () => {
+  if (closedInfo()) return { days: [], ...closedInfo() };
   const byDate = new Map();
   for (const s of db.sessions.filter((x) => x.date >= today() && !x.is_closed && stillOpen(x))) {
     if (!byDate.has(s.date)) byDate.set(s.date, []);
@@ -261,6 +264,7 @@ on('POST', '/api/appointments/check', ({ body, user }) => {
 }, 'profile');
 
 on('POST', '/api/appointments', ({ body, user }) => {
+  if (closedInfo()) throw new HttpError(409, closedInfo().closedMessage);
   const reference = text(body.reference, 'the name of the person who referred you', 120);
   const refPhone = phone(body.refPhone, "your reference's phone number");
   const refDesignation = text(body.refDesignation, "your reference's designation (for example: Teacher, Centre coordinator)", 80);
@@ -527,6 +531,19 @@ on('DELETE', '/api/admin/admins/:id', ({ params, user }) => {
   return { ok: true };
 }, 'admin');
 
+on('GET', '/api/admin/booking-status', () => ({ open: db.bookingsOpen !== false, message: db.closedMessage ?? '' }), 'admin');
+on('POST', '/api/admin/booking-status', ({ body }) => {
+  db.bookingsOpen = Boolean(body.open);
+  db.closedMessage = text(body.message, 'the message', 200, { required: false });
+  emitToStaff('sessions');
+  return { open: db.bookingsOpen, message: db.closedMessage };
+}, 'admin');
+on('POST', '/api/admin/sessions/day', ({ body }) => {
+  const list = db.sessions.filter((s) => s.date === body.date && s.capacity > 0);
+  list.forEach((s) => { s.is_closed = body.closed ? 1 : 0; });
+  emitToStaff('sessions');
+  return { updated: list.length };
+}, 'admin');
 on('GET', '/api/admin/sessions', ({ query }) => {
   const from = DATE_RE.test(query.from ?? '') ? query.from : today();
   const to = DATE_RE.test(query.to ?? '') ? query.to : addDays(from, 30);
@@ -557,7 +574,11 @@ on('POST', '/api/admin/sessions', ({ body }) => {
 on('PATCH', '/api/admin/sessions/:id', ({ params, body }) => {
   const s = db.sessions.find((x) => x.id === Number(params[0]));
   if (!s) throw new HttpError(404, 'Session not found');
-  if (body.capacity !== undefined) s.capacity = Math.max(1, Number(body.capacity) || s.capacity);
+  if (body.capacity !== undefined) {
+    const c = Number(body.capacity);
+    if (!Number.isInteger(c) || c < 1) throw new HttpError(400, 'Please enter how many people this session can take');
+    s.capacity = c;
+  }
   if (body.closed !== undefined) s.is_closed = body.closed ? 1 : 0;
   return { session: s };
 }, 'admin');

@@ -25,6 +25,25 @@ export async function api(path, { method = 'GET', body, raw } = {}) {
   return data;
 }
 
+// ---- Phone numbers ---------------------------------------------------------------
+// Every phone box takes exactly 10 digits. Pasted numbers like "+91 98765 43210"
+// or "098765 43210" are reduced to their 10 digits.
+export function tenDigits(value) {
+  let d = String(value ?? '').replace(/\D/g, '');
+  if (d.length > 10 && d.startsWith('91')) d = d.slice(2);
+  if (d.length > 10 && d.startsWith('0')) d = d.slice(1);
+  return d.slice(0, 10);
+}
+export const isTenDigits = (value) => /^\d{10}$/.test(String(value ?? ''));
+export function phoneField(id, value = '', placeholder = '9876543210') {
+  return `<div class="phone-field"><span>+91</span><input id="${id}" type="tel" inputmode="numeric" autocomplete="off" maxlength="14" pattern="[0-9]{10}" placeholder="${placeholder}" value="${esc(tenDigits(value))}" data-phone></div>`;
+}
+document.addEventListener('input', (e) => {
+  if (!e.target.matches?.('input[data-phone]')) return;
+  const clean = tenDigits(e.target.value);
+  if (e.target.value !== clean) e.target.value = clean;
+});
+
 // ---- Formatting --------------------------------------------------------------
 
 const parseDate = (date) => { const [y, m, d] = date.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
@@ -183,6 +202,11 @@ export function createRouter({ outlet, routes, fallback, guard, onChange }) {
     location.hash = fallback;
   }
   window.addEventListener('hashchange', run);
+  // Tapping the link for the screen you're on reloads it (e.g. to refresh).
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest?.('a[href^="#"]');
+    if (a && a.getAttribute('href') === location.hash && !e.defaultPrevented) { e.preventDefault(); run(); }
+  });
   return { run };
 }
 

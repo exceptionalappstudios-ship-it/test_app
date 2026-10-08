@@ -1,5 +1,5 @@
 import express from 'express';
-import { transaction } from '../db.js';
+import { transaction, getSetting, setSetting } from '../db.js';
 import { requireAdmin, publicUser } from '../auth.js';
 import { HttpError, text, phone as parsePhone, normalizePhone } from '../http.js';
 import {
@@ -267,6 +267,30 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
     if (!done) throw new HttpError(404, 'Admin not found');
     db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
     res.json({ ok: true });
+  });
+
+  // ---- Bookings on/off and slots -------------------------------------------------------
+
+  router.get('/booking-status', (_req, res) => {
+    res.json({ open: getSetting(db, 'bookings_open') !== '0', message: getSetting(db, 'bookings_closed_message') ?? '' });
+  });
+
+  // Stops (or restarts) all new bookings. Existing appointments are not affected.
+  router.post('/booking-status', (req, res) => {
+    const open = Boolean(req.body?.open);
+    setSetting(db, 'bookings_open', open ? '1' : '0');
+    setSetting(db, 'bookings_closed_message', text(req.body?.message, 'the message', 200, { required: false }));
+    notifier.emitToStaff('sessions');
+    res.json({ open, message: getSetting(db, 'bookings_closed_message') });
+  });
+
+  // Closes or opens every session on one day.
+  router.post('/sessions/day', (req, res) => {
+    const date = dateParam(req.body?.date, null);
+    if (!date) throw new HttpError(400, 'Please choose a date');
+    const { changes } = db.prepare('UPDATE visit_sessions SET is_closed = ? WHERE date = ? AND capacity > 0').run(req.body?.closed ? 1 : 0, date);
+    notifier.emitToStaff('sessions');
+    res.json({ updated: changes });
   });
 
   // ---- Visit sessions (which days are open, and how many people) ------------------------

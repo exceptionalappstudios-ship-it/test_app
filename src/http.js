@@ -14,26 +14,21 @@ export function text(value, field, max, { required = true } = {}) {
   return v;
 }
 
-// Normalises to international format (+<country><number>) so it works for
-// WhatsApp. Numbers typed without a country code get the default one.
-export function normalizePhone(value, defaultCountryCode) {
+// Mobile numbers are exactly 10 digits. They are stored with the country
+// code (+91XXXXXXXXXX) so they work for WhatsApp; a number that already
+// carries that code (as stored) is accepted too.
+export function normalizePhone(value, countryCode = '91') {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (!raw || !/^\+?[\d\s()-]+$/.test(raw)) return null;
-  let digits = raw.replace(/\D/g, '');
-  if (!raw.startsWith('+')) {
-    if (digits.startsWith('00')) digits = digits.slice(2);
-    else {
-      digits = digits.replace(/^0+/, '');
-      if (digits.length <= 10) digits = defaultCountryCode + digits;
-    }
-  }
-  if (digits.length < 10 || digits.length > 15) return null;
-  return `+${digits}`;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+${countryCode}${digits}`;
+  if (raw.startsWith('+') && digits.length === countryCode.length + 10 && digits.startsWith(countryCode)) return `+${digits}`;
+  return null;
 }
 
-export function phone(value, defaultCountryCode, field = 'a valid WhatsApp number') {
-  const p = normalizePhone(value, defaultCountryCode);
-  if (!p) throw new HttpError(400, `Please enter ${field}`);
+export function phone(value, countryCode, field = 'a valid WhatsApp number') {
+  const p = normalizePhone(value, countryCode);
+  if (!p) throw new HttpError(400, `Please enter ${field} (10 digits)`);
   return p;
 }
 

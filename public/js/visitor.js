@@ -1,6 +1,6 @@
 import {
   $, $$, api, esc, formatDate, formatShortDate, formatPhone, formatWhen, dayParts, plural, statusChip, photoTag, contactButtons,
-  toast, openSheet, confirmSheet, busy, createRouter, goBack, replaceHash, liveStream, homeFor, enablePush, pushSupported, registerServiceWorker, PERIOD_ICONS,
+  toast, openSheet, confirmSheet, busy, createRouter, goBack, replaceHash, phoneField, tenDigits, isTenDigits, liveStream, homeFor, enablePush, pushSupported, registerServiceWorker, PERIOD_ICONS,
 } from './common.js';
 import { icons } from './icons.js';
 import { renderLogin, renderProfileSetup } from './login.js';
@@ -92,20 +92,16 @@ function stepHeader(step) {
   header(...STEP_TITLES[step], steps.length, steps.indexOf(step) + 1);
 }
 const go = (step) => { location.hash = stepHash(step); };
-const normal = (p) => {
-  const d = String(p ?? '').replace(/\D/g, '');
-  if (String(p).trim().startsWith('+')) return `+${d}`;
-  const local = d.replace(/^0+/, '');
-  return local.length <= 10 ? `+91${local}` : `+${local}`;
-};
+const normal = (p) => `+91${tenDigits(p)}`;
 const maxPeople = () => Math.max(1, Math.min(config.maxPeople, draft?.session?.remaining ?? config.maxPeople));
 const problemBox = (msg) => (msg ? `<div class="notice bad" style="margin-bottom:14px">${icons.alert}<span>${esc(msg)}</span></div>` : '');
 
 // Step 1: day and morning / afternoon / evening.
 async function bookWhenView(ctx) {
   stepHeader('when');
-  const [{ days }, me] = await Promise.all([api('/api/availability'), api('/api/me')]);
+  const [avail, me] = await Promise.all([api('/api/availability'), api('/api/me')]);
   if (!ctx.isCurrent()) return;
+  const { days } = avail;
   const existing = me.appointments.find((a) => a.upcoming);
   if (existing) {
     header('Book a visit', '');
@@ -114,6 +110,11 @@ async function bookWhenView(ctx) {
       <h2>You already have an appointment</h2>
       <p class="sub">${esc(formatDate(existing.date))} · ${esc(existing.periodLabel)}<br>Each person can have one appointment at a time.</p>
       <a class="btn block" href="#/visit">See my visit</a></div>`;
+    return;
+  }
+  if (avail.closed) {
+    header('Book a visit', '');
+    ctx.el.innerHTML = `<div class="card center"><div class="big-icon wait">${icons.calendar}</div><h2>Bookings are closed</h2><p class="sub">${esc(avail.closedMessage)}</p></div>`;
     return;
   }
   bookingDays = days;
@@ -187,7 +188,7 @@ function bookDetailsView(ctx, problem = '') {
       <label for="reference">Their name <span class="muted small">(required)</span></label>
       <input id="reference" maxlength="120" value="${esc(draft.reference)}" placeholder="Full name">
       <label for="refPhone">Their phone number <span class="muted small">(required)</span></label>
-      <div class="phone-field"><span>+91</span><input id="refPhone" type="tel" inputmode="tel" maxlength="20" value="${esc(draft.refPhone.replace(/^\+91/, ''))}" placeholder="98765 43210"></div>
+      ${phoneField('refPhone', draft.refPhone)}
       <label for="refDesignation">Their designation <span class="muted small">(required)</span></label>
       <input id="refDesignation" maxlength="80" value="${esc(draft.refDesignation)}" placeholder="For example: Teacher, Centre coordinator">
     </form>
@@ -225,7 +226,7 @@ function bookDetailsView(ctx, problem = '') {
   $('[data-change-wa]', ctx.el).addEventListener('click', () => {
     $('[data-wa]', ctx.el).innerHTML = `
       <label for="wa" style="margin-top:0">WhatsApp number for your pass</label>
-      <div class="phone-field"><span>+91</span><input id="wa" type="tel" inputmode="tel" maxlength="20" value="${esc(draft.phone.replace(/^\+91/, ''))}"></div>
+      ${phoneField('wa', draft.phone)}
       <div class="hint">The QR pass and all updates will go to this number.</div>`;
     $('#wa', ctx.el).focus();
   });
@@ -240,10 +241,9 @@ function bookDetailsView(ctx, problem = '') {
   $('[data-back]', ctx.el).addEventListener('click', () => { keep(); goBack('#/book'); });
   $('[data-next]', ctx.el).addEventListener('click', () => {
     keep();
-    const digits = (v) => v.replace(/\D/g, '').length;
-    const msg = digits(draft.phone) < 10 ? 'Please enter the WhatsApp number for your pass.'
+    const msg = !isTenDigits(tenDigits(draft.phone)) ? 'Please enter the 10-digit WhatsApp number for your pass.'
       : draft.reference.length < 2 ? 'Please enter the name of the person who referred you.'
-      : digits(draft.refPhone) < 10 ? "Please enter your reference's phone number."
+      : !isTenDigits(draft.refPhone) ? "Please enter your reference's 10-digit phone number."
       : draft.refDesignation.length < 2 ? "Please enter your reference's designation."
       : !draft.purposes.length ? 'Please choose the purpose of your meeting.'
       : draft.purposes.includes('other') && !draft.description.trim() ? 'Please tell us in a few words about your visit.' : '';
@@ -252,7 +252,8 @@ function bookDetailsView(ctx, problem = '') {
   });
 }
 
-// Step 3: the other people in the group.
+// Step 3: the other people in the group. Each number is checked as soon as
+// all 10 digits are typed, and a warning clears as soon as the number changes.
 function bookPeopleView(ctx, problem = '') {
   if (!draft?.session || draft.count < 2) { replaceHash('#/book'); return; }
   stepHeader('people');
@@ -260,24 +261,57 @@ function bookPeopleView(ctx, problem = '') {
   const own = draft.conflicts[normal(draft.phone)] ?? draft.conflicts[user.phone];
   ctx.el.innerHTML = `
     ${own ? problemBox(own) : ''}
-    ${draft.people.map((p, i) => {
-      const c = draft.conflicts[normal(p.phone)];
-      return `<div class="card" data-person="${i}">
+    ${draft.people.map((p, i) => `<div class="card" data-person="${i}">
         <div class="row" style="justify-content:space-between"><h3 style="margin:0">Person ${i + 2}</h3>
           <button type="button" class="btn ghost small" data-remove="${i}" style="color:var(--red)">${icons.trash} Remove</button></div>
         <label for="pn${i}">Full name</label>
         <input id="pn${i}" data-field="name" maxlength="80" value="${esc(p.name)}" placeholder="Name">
-        <label for="pp${i}">Phone number</label>
-        <div class="phone-field"><span>+91</span><input id="pp${i}" data-field="phone" type="tel" inputmode="tel" maxlength="20" value="${esc(p.phone.replace(/^\+91/, ''))}" placeholder="98765 43210"></div>
-        ${c ? `<div class="notice bad" style="margin-top:10px">${icons.alert}<span>${esc(c)}</span></div>` : ''}
-      </div>`;
-    }).join('')}
-    ${problemBox(problem)}
+        <label for="pp${i}">Phone number (10 digits)</label>
+        ${phoneField(`pp${i}`, p.phone)}
+        <div data-warn></div>
+      </div>`).join('')}
+    <div data-problem>${problemBox(problem)}</div>
     <div class="actions" style="margin-top:0"><button class="btn light" data-back>${icons.back} Back</button><button class="btn" data-next>Continue ${icons.next}</button></div>`;
-  const keep = () => $$('[data-person]', ctx.el).forEach((card) => {
+
+  const cards = $$('[data-person]', ctx.el);
+  const keep = () => cards.forEach((card) => {
     const p = draft.people[Number(card.dataset.person)];
     p.name = $('[data-field=name]', card).value.trim();
-    p.phone = $('[data-field=phone]', card).value.trim();
+    p.phone = tenDigits($('[data-phone]', card).value);
+  });
+  // A warning for one person, or none.
+  const warningFor = (i) => {
+    const p = draft.people[i];
+    if (!isTenDigits(p.phone)) return '';
+    const mine = normal(p.phone);
+    if (mine === normal(draft.phone) || mine === user.phone) return 'This is your own number. Please enter this person\'s number.';
+    const other = draft.people.findIndex((q, j) => j !== i && isTenDigits(q.phone) && normal(q.phone) === mine);
+    if (other >= 0) return `Same number as person ${other + 2}. Each person needs their own number.`;
+    return draft.conflicts[mine] ?? '';
+  };
+  const showWarnings = () => {
+    cards.forEach((card) => {
+      const w = warningFor(Number(card.dataset.person));
+      $('[data-warn]', card).innerHTML = w ? `<div class="notice bad" style="margin-top:10px">${icons.alert}<span>${esc(w)}</span></div>` : '';
+    });
+  };
+  showWarnings();
+
+  cards.forEach((card) => {
+    const input = $('[data-phone]', card);
+    input.addEventListener('input', () => {
+      keep();
+      $('[data-problem]', ctx.el).innerHTML = '';
+      showWarnings();
+      // Ask the server about this number as soon as it is complete.
+      const p = draft.people[Number(card.dataset.person)];
+      if (isTenDigits(p.phone) && !(normal(p.phone) in draft.conflicts)) {
+        api('/api/appointments/check', { method: 'POST', body: { phones: [p.phone] } }).then(({ conflicts }) => {
+          draft.conflicts[normal(p.phone)] = conflicts[0]?.message ?? '';
+          if (ctx.isCurrent()) showWarnings();
+        }).catch(() => {});
+      }
+    });
   });
   $$('[data-remove]', ctx.el).forEach((b) => b.addEventListener('click', () => {
     keep();
@@ -288,14 +322,13 @@ function bookPeopleView(ctx, problem = '') {
   $('[data-back]', ctx.el).addEventListener('click', () => { keep(); goBack('#/book/details'); });
   $('[data-next]', ctx.el).addEventListener('click', async (e) => {
     keep();
-    const missing = draft.people.findIndex((p) => p.name.length < 2 || p.phone.replace(/\D/g, '').length < 10);
-    if (missing >= 0) return bookPeopleView(ctx, `Please enter the name and phone number of person ${missing + 2}.`);
-    const all = [draft.phone, ...draft.people.map((p) => p.phone)].map(normal);
-    const dup = all.findIndex((p, i) => all.indexOf(p) !== i);
-    if (dup >= 0) return bookPeopleView(ctx, `${dup === 0 ? 'Your' : `Person ${dup + 1}'s`} number is entered twice. Each person needs their own number.`);
-    const { conflicts } = await busy(e.currentTarget, () => api('/api/appointments/check', { method: 'POST', body: { phones: [draft.phone, user.phone, ...draft.people.map((p) => p.phone)] } }));
+    const missing = draft.people.findIndex((p) => p.name.length < 2 || !isTenDigits(p.phone));
+    if (missing >= 0) return bookPeopleView(ctx, `Please enter the name and 10-digit phone number of person ${missing + 2}.`);
+    const { conflicts } = await busy(e.currentTarget, () => api('/api/appointments/check', { method: 'POST', body: { phones: [normal(draft.phone), user.phone, ...draft.people.map((p) => normal(p.phone))] } }));
     draft.conflicts = Object.fromEntries(conflicts.map((c) => [c.phone, c.message]));
-    if (conflicts.length) return bookPeopleView(ctx, 'Some people already have an appointment. Each person can have only one. Remove them, or ask them to cancel their other appointment.');
+    if (draft.people.some((_, i) => warningFor(i)) || draft.conflicts[normal(draft.phone)] || draft.conflicts[user.phone]) {
+      return bookPeopleView(ctx, 'Please fix the numbers marked in red. Change the number, or remove that person.');
+    }
     go('review');
   });
 }
@@ -325,8 +358,8 @@ function bookReviewView(ctx, problem = '') {
   $('[data-send]', ctx.el).addEventListener('click', async (e) => {
     try {
       const { appointment } = await busy(e.currentTarget, () => api('/api/appointments', { method: 'POST', body: {
-        sessionId: draft.session.id, phone: draft.phone, reference: draft.reference, refPhone: draft.refPhone, refDesignation: draft.refDesignation,
-        peopleCount: draft.count, people: draft.people, purposes: draft.purposes, description: draft.description,
+        sessionId: draft.session.id, phone: normal(draft.phone), reference: draft.reference, refPhone: normal(draft.refPhone), refDesignation: draft.refDesignation,
+        peopleCount: draft.count, people: draft.people.map((p) => ({ name: p.name, phone: normal(p.phone) })), purposes: draft.purposes, description: draft.description,
       } }));
       draft = null;
       // The finished booking replaces the steps in the history, so Back doesn't reopen them.

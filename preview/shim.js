@@ -63,7 +63,11 @@ document.addEventListener('click', (e) => {
   const a = e.target.closest?.('a[href]');
   if (!a || e.defaultPrevented) return;
   const href = a.getAttribute('href');
-  if (href.startsWith('#')) { e.preventDefault(); location.hash = href; }
+  if (href.startsWith('#')) {
+    if (href === location.hash) return; // the app reloads the current screen itself
+    e.preventDefault();
+    location.hash = href;
+  }
   else if (href.startsWith('/')) { e.preventDefault(); backend.navigate?.(frame, href); }
 }, true);
 

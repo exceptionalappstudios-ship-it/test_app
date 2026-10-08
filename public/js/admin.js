@@ -1,6 +1,6 @@
 import {
   $, $$, api, esc, formatDate, formatShortDate, formatPhone, formatTime, formatWhen, addDays, plural, statusChip, photoTag,
-  contactButtons, toast, openSheet, confirmSheet, busy, throttle, createRouter, goBack, liveStream, homeFor, PERIOD_ICONS,
+  contactButtons, toast, openSheet, confirmSheet, busy, throttle, createRouter, goBack, liveStream, homeFor, PERIOD_ICONS, phoneField, isTenDigits,
 } from './common.js';
 import { icons } from './icons.js';
 import { renderLogin, renderProfileSetup } from './login.js';
@@ -190,7 +190,7 @@ async function homeView(ctx) {
         <div class="kpi"><div class="l">Bookings</div><div class="v">${s.bookings}</div></div>
         <div class="kpi"><div class="l">Checked in</div><div class="v">${s.checkedInBookings}</div></div>
       </div>
-      <a class="btn blue block" href="#/express" style="margin-top:14px">⚡ Create express pass</a>
+      <div class="actions" style="margin-top:14px"><a class="btn blue" href="#/express">⚡ Express pass</a><a class="btn light" href="#/sessions">${icons.calendar} Bookings &amp; slots</a></div>
       <div style="margin-top:14px">
         ${s.pending ? `<a class="alert-link" href="#/requests"><span class="count">${s.pending}</span>New requests to review${icons.next}</a>` : ''}
         ${s.hold ? `<a class="alert-link" href="#/requests?hold"><span class="count violet">${s.hold}</span>Requests on hold${icons.next}</a>` : ''}
@@ -198,13 +198,13 @@ async function homeView(ctx) {
       </div>
       <div class="two-col">
         <div class="card">
-          <h2>Sessions</h2>
+          <div class="row" style="justify-content:space-between"><h2>Sessions</h2><a class="small" href="#/sessions">Manage slots</a></div>
           ${d.sessions.length ? d.sessions.map((x) => {
             const p = x.people ? Math.round((x.checkedInPeople / x.people) * 100) : 0;
             return `<div class="session-row"><div class="row" style="gap:8px"><span style="color:var(--blue-700);display:grid">${PERIOD_ICONS[x.period].replace('<svg', '<svg width="20" height="20"')}</span><strong>${esc(x.label)}</strong></div>
               <div class="meter" title="${x.checkedInPeople} of ${x.people} people"><span style="width:${p}%"></span></div>
               <span class="n">${x.checkedInPeople} / ${x.people}</span></div>`;
-          }).join('') + '<div class="small muted" style="margin-top:6px">People checked in / people confirmed</div>' : '<div class="empty">No sessions open on this day. <a href="#/sessions">Open days</a></div>'}
+          }).join('') + '<div class="small muted" style="margin-top:6px">People checked in / people confirmed</div>' : '<div class="empty">No sessions open on this day. <a href="#/sessions">Bookings &amp; slots</a></div>'}
         </div>
         <div class="card">
           <h2>Last 7 days and next 7 days</h2>
@@ -365,9 +365,9 @@ function moreView(ctx) {
   ctx.el.innerHTML = `
     <div class="card row">${photoTag(user.photo, user.name, 'lg')}<div class="grow"><div style="font-weight:800;font-size:1.1rem">${esc(user.name)}</div><div class="muted small">${esc(formatPhone(user.phone))} · Admin</div></div></div>
     <div class="card flush">
+      ${link('#/sessions', icons.calendar, 'Bookings & slots', 'Open or close bookings, open days, set slots')}
       ${link('#/express', icons.ticket, 'Express pass', 'Let someone in today with just a name and number')}
       ${link('/security.html#/scan', icons.scan, 'Scan passes', 'Open the scanner')}
-      ${link('#/sessions', icons.calendar, 'Open days and sessions', 'Choose days, Morning / Afternoon / Evening and places')}
       ${link('#/admins', icons.key, 'Admins', 'Add or remove admins')}
       ${link('#/outbox', icons.message, 'WhatsApp delivery', 'See sent and failed messages')}
     </div>
@@ -381,38 +381,78 @@ function moreView(ctx) {
 
 async function sessionsView(ctx) {
   await ensureToday();
-  header('Open days', 'Choose which days and times visitors can book, and how many people each can take.');
+  header('Bookings & slots', 'Open or close bookings, and set how many people each session can take.');
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   ctx.el.innerHTML = `
-    <form class="card" id="add">
-      <h2>Open more days</h2>
-      <div class="two-col">
-        <div><label for="from">From</label><input id="from" name="fromDate" type="date" value="${today}" required></div>
-        <div><label for="to">To</label><input id="to" name="toDate" type="date" value="${addDays(today, 30)}" required></div>
-      </div>
-      <div class="label">Days of the week</div>
-      <div class="chips">${DAYS.map((d, i) => `<label class="tag" style="margin:0;display:inline-flex;gap:6px;align-items:center;padding:8px 12px;font-size:.9rem"><input type="checkbox" name="wd" value="${i}" ${i ? 'checked' : ''} style="width:auto"> ${d}</label>`).join('')}</div>
-      <div class="label">Times of day</div>
-      <div class="chips">${Object.entries(config.periods).map(([k, p]) => `<label class="tag" style="margin:0;display:inline-flex;gap:6px;align-items:center;padding:8px 12px;font-size:.9rem"><input type="checkbox" name="period" value="${k}" checked style="width:auto"> ${esc(p.label)} <span class="muted">(from ${esc(p.opensAt)})</span></label>`).join('')}</div>
-      <label for="cap">People per session</label>
-      <input id="cap" name="capacity" type="number" min="1" max="10000" value="100" required>
-      <div class="actions"><button class="btn block" type="submit">${icons.plus} Open these days</button></div>
-    </form>
+    <div class="card" id="master"><div class="spinner"></div></div>
+    <details class="card" id="addBox">
+      <summary style="font-weight:800;cursor:pointer;font-size:1.05rem">${icons.plus.replace('<svg', '<svg width="18" height="18" style="vertical-align:-3px"')} Open new days</summary>
+      <form id="add">
+        <div class="two-col">
+          <div><label for="from">From</label><input id="from" name="fromDate" type="date" value="${today}" required></div>
+          <div><label for="to">To</label><input id="to" name="toDate" type="date" value="${addDays(today, 30)}" required></div>
+        </div>
+        <div class="label">Days of the week</div>
+        <div class="chips">${DAYS.map((d, i) => `<label class="tag pick"><input type="checkbox" name="wd" value="${i}" ${i ? 'checked' : ''}> ${d}</label>`).join('')}</div>
+        <div class="label">Times of day</div>
+        <div class="chips">${Object.entries(config.periods).map(([k, p]) => `<label class="tag pick"><input type="checkbox" name="period" value="${k}" checked> ${esc(p.label)}</label>`).join('')}</div>
+        <label for="cap">Slots per session (people)</label>
+        <input id="cap" name="capacity" type="number" min="1" max="10000" value="100" required inputmode="numeric">
+        <div class="actions"><button class="btn block" type="submit">${icons.plus} Open these days</button></div>
+      </form>
+    </details>
     <div class="section-title">Next 30 days</div><div id="list"></div>`;
+
+  const loadMaster = async () => {
+    const st = await api('/api/admin/booking-status');
+    if (!ctx.isCurrent()) return;
+    $('#master', ctx.el).innerHTML = `
+      <div class="row" style="align-items:flex-start">
+        <div class="grow"><h2 style="margin:0">New bookings are ${st.open ? '<span style="color:var(--green-dark)">open</span>' : '<span style="color:var(--red)">closed</span>'}</h2>
+          <p class="sub" style="margin:4px 0 0">${st.open ? 'Visitors can request appointments.' : 'Visitors see a "bookings are closed" message. Confirmed visits and express passes still work.'}</p></div>
+        <button class="switch ${st.open ? 'on' : ''}" role="switch" aria-checked="${st.open}" aria-label="Accept new bookings" data-master></button>
+      </div>
+      ${st.open ? '' : `<label for="cm">Message shown to visitors</label><div class="row"><input id="cm" maxlength="200" value="${esc(st.message)}" placeholder="For example: Bookings reopen on Monday."><button class="btn small light" data-save-msg style="min-height:50px">Save</button></div>`}`;
+    $('[data-master]', ctx.el).addEventListener('click', async (e) => {
+      const open = !st.open;
+      if (!open && !await confirmSheet({ title: 'Stop all new bookings?', message: 'Visitors will not be able to request appointments until you turn this back on.', confirm: 'Stop bookings', danger: true })) return;
+      await busy(e.currentTarget, () => api('/api/admin/booking-status', { method: 'POST', body: { open, message: st.message } }));
+      toast(open ? 'Bookings are open.' : 'Bookings are closed.');
+      loadMaster();
+    });
+    $('[data-save-msg]', ctx.el)?.addEventListener('click', async (e) => {
+      await busy(e.currentTarget, () => api('/api/admin/booking-status', { method: 'POST', body: { open: false, message: $('#cm', ctx.el).value } }));
+      toast('Message saved.');
+    });
+  };
+
+  let sessions = [];
   const load = async () => {
-    const { sessions } = await api(`/api/admin/sessions?from=${today}&to=${addDays(today, 30)}`);
+    ({ sessions } = await api(`/api/admin/sessions?from=${today}&to=${addDays(today, 30)}`));
     if (!ctx.isCurrent()) return;
     const byDate = new Map();
-    for (const s of sessions) byDate.set(s.date, [...(byDate.get(s.date) ?? []), s]);
-    $('#list', ctx.el).innerHTML = byDate.size ? [...byDate].map(([date, list]) => `
-      <div class="card"><h3>${esc(formatDate(date))}</h3>${list.map((s) => `
-        <div class="session-row" data-id="${s.id}" style="grid-template-columns:auto 1fr auto">
-          <strong style="min-width:92px">${esc(s.label)}</strong>
-          <div><div class="meter"><span style="width:${Math.min(100, Math.round((s.booked / s.capacity) * 100))}%"></span></div>
-            <div class="small muted" style="margin-top:4px">${s.booked} of ${s.capacity} places taken${s.is_closed ? ' · <strong style="color:var(--red)">Closed</strong>' : ''}</div></div>
-          <button class="btn small light" data-edit>${icons.edit}</button>
-        </div>`).join('')}</div>`).join('') : '<div class="card empty">No days open yet. Use the form above.</div>';
+    for (const x of sessions) if (x.capacity > 0) byDate.set(x.date, [...(byDate.get(x.date) ?? []), x]);
+    $('#list', ctx.el).innerHTML = byDate.size ? [...byDate].map(([date, list]) => {
+      const allClosed = list.every((x) => x.is_closed);
+      return `<div class="card" data-date="${date}">
+        <div class="row" style="justify-content:space-between;margin-bottom:6px"><h3 style="margin:0">${esc(formatDate(date))}</h3>
+          <button class="btn small ${allClosed ? '' : 'danger'}" data-day="${allClosed ? 'open' : 'close'}">${allClosed ? 'Open day' : 'Close day'}</button></div>
+        ${list.map((x) => `
+          <div class="slot-row ${x.is_closed ? 'closed' : ''}" data-id="${x.id}">
+            <div class="slot-name"><span class="ic">${PERIOD_ICONS[x.period]}</span><div><strong>${esc(x.label)}</strong>
+              <div class="small muted">${x.booked} booked${x.is_closed ? ' · <strong style="color:var(--red)">Closed</strong>' : ''}</div></div></div>
+            <div class="slot-qty" aria-label="Slots">
+              <button type="button" data-step="-1" aria-label="Fewer slots">${icons.minus}</button>
+              <input type="number" inputmode="numeric" min="${Math.max(1, x.booked)}" max="10000" value="${x.capacity}" aria-label="Slots for ${esc(x.label)}">
+              <button type="button" data-step="1" aria-label="More slots">${icons.plus}</button>
+            </div>
+            <button class="switch ${x.is_closed ? '' : 'on'}" role="switch" aria-checked="${!x.is_closed}" aria-label="${esc(x.label)} open for booking" data-toggle></button>
+          </div>`).join('')}
+        <div class="small muted" style="margin-top:6px">Slots = how many people can book. Switch off to stop bookings for that session.</div>
+      </div>`;
+    }).join('') : '<div class="card empty">No days open yet. Use "Open new days" above.</div>';
   };
+
   $('#add', ctx.el).addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -422,27 +462,53 @@ async function sessionsView(ctx) {
     };
     const { created, skipped } = await busy($('button[type=submit]', f), () => api('/api/admin/sessions', { method: 'POST', body }));
     toast(`${plural(created, 'session')} opened${skipped ? ` (${skipped} already open)` : ''}.`);
+    $('#addBox', ctx.el).open = false;
     load();
   });
+
+  // Slot changes save on their own, shortly after the last tap.
+  const timers = {};
+  const saveQty = (row) => {
+    clearTimeout(timers[row.dataset.id]);
+    timers[row.dataset.id] = setTimeout(async () => {
+      const input = $('input', row);
+      const capacity = Number(input.value);
+      const x = sessions.find((y) => y.id === Number(row.dataset.id));
+      if (!Number.isInteger(capacity) || capacity < 1) { input.value = x.capacity; return; }
+      if (capacity < x.booked) { toast(`${x.booked} people are already booked. Slots can't be fewer than that.`); input.value = x.capacity; return; }
+      try {
+        await api(`/api/admin/sessions/${x.id}`, { method: 'PATCH', body: { capacity } });
+        x.capacity = capacity;
+        toast(`${x.label}: ${capacity} slots.`);
+      } catch (err) { toast(err.message); input.value = x.capacity; }
+    }, 700);
+  };
   $('#list', ctx.el).addEventListener('click', async (e) => {
-    const row = e.target.closest('[data-edit]')?.closest('[data-id]');
-    if (!row) return;
-    const id = row.dataset.id;
-    const { sessions } = await api(`/api/admin/sessions?from=${today}&to=${addDays(today, 30)}`);
-    const s = sessions.find((x) => x.id === Number(id));
-    const { el, close } = openSheet(`<h2 style="margin:0 0 4px">${esc(formatDate(s.date))} · ${esc(s.label)}</h2><p class="sub">${s.booked} places taken.</p>
-      <label for="ec">People allowed</label><input id="ec" type="number" min="1" max="10000" value="${s.capacity}">
-      <div class="actions"><button class="btn" data-save>Save</button></div>
-      <div class="actions">
-        <button class="btn ${s.is_closed ? '' : 'amber'}" data-toggle>${s.is_closed ? 'Open for booking' : 'Close for booking'}</button>
-        ${s.bookings ? '' : `<button class="btn danger" data-del>${icons.trash} Delete</button>`}
-      </div>`);
-    const patch = async (b, body, msg) => { await busy(b, () => api(`/api/admin/sessions/${id}`, { method: 'PATCH', body })); close(); toast(msg); load(); };
-    $('[data-save]', el).addEventListener('click', (ev) => patch(ev.currentTarget, { capacity: Number($('#ec', el).value) }, 'Saved.'));
-    $('[data-toggle]', el).addEventListener('click', (ev) => patch(ev.currentTarget, { closed: !s.is_closed }, s.is_closed ? 'Opened.' : 'Closed for booking.'));
-    $('[data-del]', el)?.addEventListener('click', async (ev) => { await busy(ev.currentTarget, () => api(`/api/admin/sessions/${id}`, { method: 'DELETE' })); close(); toast('Deleted.'); load(); });
+    const row = e.target.closest('[data-id]');
+    const step = e.target.closest('[data-step]');
+    if (step && row) {
+      const input = $('input', row);
+      input.value = Math.max(1, Number(input.value || 0) + Number(step.dataset.step) * (Number(input.value) >= 50 ? 5 : 1));
+      saveQty(row);
+      return;
+    }
+    if (e.target.closest('[data-toggle]') && row) {
+      const x = sessions.find((y) => y.id === Number(row.dataset.id));
+      await busy(e.target.closest('[data-toggle]'), () => api(`/api/admin/sessions/${x.id}`, { method: 'PATCH', body: { closed: !x.is_closed } }));
+      toast(`${x.label} ${x.is_closed ? 'opened' : 'closed'} for booking.`);
+      load();
+      return;
+    }
+    const day = e.target.closest('[data-day]');
+    if (day) {
+      const date = day.closest('[data-date]').dataset.date;
+      await busy(day, () => api('/api/admin/sessions/day', { method: 'POST', body: { date, closed: day.dataset.day === 'close' } }));
+      toast(`${formatShortDate(date)} ${day.dataset.day === 'close' ? 'closed' : 'opened'} for booking.`);
+      load();
+    }
   });
-  await load();
+  $('#list', ctx.el).addEventListener('change', (e) => { const row = e.target.closest('[data-id]'); if (row && e.target.matches('input')) saveQty(row); });
+  await Promise.all([loadMaster(), load()]);
 }
 
 async function adminsView(ctx) {
@@ -454,14 +520,15 @@ async function adminsView(ctx) {
       <form class="card" id="add">
         <h2>Add an admin</h2>
         <label for="an">Name</label><input id="an" name="name" maxlength="80">
-        <label for="ap">WhatsApp number</label><div class="phone-field"><span>+91</span><input id="ap" name="phone" type="tel" inputmode="tel" maxlength="20" required></div>
+        <label for="ap">WhatsApp number (10 digits)</label>${phoneField('ap')}
         <div class="actions"><button class="btn block" type="submit">${icons.plus} Add admin</button></div>
       </form>
       <div class="card flush">${admins.map((a) => `<div class="person">${photoTag(a.photo, a.name)}<div class="grow"><div class="name">${esc(a.name ?? 'Not logged in yet')}${a.id === user.id ? ' (you)' : ''}</div><div class="meta">${esc(formatPhone(a.phone))}</div></div>
         ${a.id === user.id ? '' : `<button class="btn small danger" data-remove="${a.id}">Remove</button>`}</div>`).join('')}</div>`;
     $('#add', ctx.el).addEventListener('submit', async (e) => {
       e.preventDefault();
-      await busy($('button', e.target), () => api('/api/admin/admins', { method: 'POST', body: { name: e.target.name.value, phone: e.target.phone.value } }));
+      if (!isTenDigits($('#ap', ctx.el).value)) { toast('Please enter a 10-digit WhatsApp number.'); return; }
+      await busy($('button', e.target), () => api('/api/admin/admins', { method: 'POST', body: { name: e.target.name.value, phone: $('#ap', ctx.el).value } }));
       toast('Admin added. They can now log in with their WhatsApp number.');
       load();
     });
@@ -498,12 +565,12 @@ async function expressView(ctx) {
       <label for="xn" style="margin-top:0">Name <span class="muted small">(required)</span></label>
       <input id="xn" maxlength="80" autocomplete="off" placeholder="Full name">
       <label for="xp">WhatsApp number <span class="muted small">(required)</span></label>
-      <div class="phone-field"><span>+91</span><input id="xp" type="tel" inputmode="tel" maxlength="20" placeholder="98765 43210"></div>
+      ${phoneField('xp')}
       <div class="label">How many people?</div>
       <div class="stepper"><button type="button" data-dec aria-label="Fewer">${icons.minus}</button><span class="n" data-num>1</span><button type="button" data-inc aria-label="More">${icons.plus}</button><span class="muted small">Up to ${config.maxPeople}</span></div>
       <h3 style="margin:22px 0 0">Reference <span class="muted small" style="font-weight:500">(optional)</span></h3>
       <label for="xr">Name</label><input id="xr" maxlength="120" placeholder="Who referred them">
-      <label for="xrp">Phone number</label><div class="phone-field"><span>+91</span><input id="xrp" type="tel" inputmode="tel" maxlength="20" placeholder="98765 43210"></div>
+      <label for="xrp">Phone number (10 digits)</label>${phoneField('xrp')}
       <label for="xrd">Designation</label><input id="xrd" maxlength="80" placeholder="For example: Teacher, Centre coordinator">
       <details style="margin-top:18px">
         <summary style="font-weight:700;cursor:pointer;padding:6px 0">Photo, purpose and note <span class="muted small">(optional)</span></summary>
@@ -529,6 +596,10 @@ async function expressView(ctx) {
   const submit = async (button, force = false) => {
     const err = $('[data-error]', ctx.el);
     err.innerHTML = '';
+    const problem = !$('#xn', ctx.el).value.trim() ? 'Please enter their name.'
+      : !isTenDigits($('#xp', ctx.el).value) ? 'Please enter their 10-digit WhatsApp number.'
+      : $('#xrp', ctx.el).value && !isTenDigits($('#xrp', ctx.el).value) ? "The reference's phone number must be 10 digits." : '';
+    if (problem) { err.innerHTML = `<div class="notice bad" style="margin-top:12px">${icons.alert}<span>${esc(problem)}</span></div>`; return; }
     try {
       let photoName = null;
       if (photo) photoName = (await busy(button, () => api('/api/admin/photos', { method: 'POST', raw: photo }))).photo;

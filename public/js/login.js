@@ -1,6 +1,6 @@
 // WhatsApp-number login with a one-time code, and the "add your name and
 // photo" step that every new account goes through.
-import { $, api, esc, formatPhone, busy } from './common.js';
+import { $, api, esc, formatPhone, busy, phoneField, isTenDigits } from './common.js';
 import { icons } from './icons.js';
 import { photoPicker, uploadPhoto } from './photo.js';
 
@@ -15,8 +15,8 @@ export function renderLogin(el, { signupAs = 'visitor', onDone, footer = '' }) {
         <h2>Log in with WhatsApp</h2>
         <p class="sub">Enter your WhatsApp number. We will send you a 6-digit code on WhatsApp.</p>
         <label for="phone">WhatsApp number</label>
-        <div class="phone-field"><span>+91</span><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="98765 43210" required maxlength="20" value="${esc(phone.replace(/^\+91/, ''))}"></div>
-        <div class="hint">Number from another country? Type + and your country code first.</div>
+        ${phoneField('phone', phone)}
+        <div class="hint">Your 10-digit mobile number.</div>
         ${error ? `<div class="notice bad" style="margin-top:12px">${icons.alert}<span>${esc(error)}</span></div>` : ''}
         <div class="actions"><button class="btn block" type="submit">${icons.whatsapp} Send code on WhatsApp</button></div>
       </form>${footer}`;
@@ -24,8 +24,8 @@ export function renderLogin(el, { signupAs = 'visitor', onDone, footer = '' }) {
     $('#phone', el).focus();
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const value = form.phone.value.trim();
-      if (value.replace(/\D/g, '').length < 10) return phoneStep('Please enter your full WhatsApp number.');
+      const value = form.querySelector('#phone').value.trim();
+      if (!isTenDigits(value)) return phoneStep('Please enter your 10-digit WhatsApp number.');
       try {
         const res = await busy($('button', form), () => api('/api/auth/otp/request', { method: 'POST', body: { phone: value } }));
         phone = res.phone;
