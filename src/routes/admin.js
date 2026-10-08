@@ -2,11 +2,11 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { transaction } from '../db.js';
 import { requireAdmin, publicUser } from '../auth.js';
-import { HttpError, text, phone as parsePhone } from '../http.js';
-import { ACTIVE, APPOINTMENT_SELECT, getAppointment, viewsWithPeople } from '../appointments.js';
+import { HttpError, text, phone as parsePhone, normalizePhone } from '../http.js';
+import { ACTIVE, APPOINTMENT_SELECT, PURPOSES, getAppointment, viewsWithPeople, currentPeriod } from '../appointments.js';
 import { nowInTimezone, minutesUntil, addDays, dayOfWeek, formatVisit, formatClock, formatDay, PERIODS, DATE_RE } from '../time.js';
 
-export function adminRoutes({ db, notifier, config, now, jobs }) {
+export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
   const router = express.Router();
   const { timeZone, periods } = config;
   const today = () => nowInTimezone(timeZone, now()).date;
@@ -79,8 +79,8 @@ export function adminRoutes({ db, notifier, config, now, jobs }) {
     if (checked === 'out') where.push("a.status = 'approved' AND a.checked_in_at IS NULL");
     if (q) {
       const digits = q.replace(/\D/g, '');
-      where.push(`(a.name LIKE ? OR a.reference LIKE ?${digits.length >= 3 ? ' OR a.id IN (SELECT appointment_id FROM appointment_people WHERE phone LIKE ?)' : ''} OR a.id IN (SELECT appointment_id FROM appointment_people WHERE name LIKE ?))`);
-      args.push(`%${q}%`, `%${q}%`, ...(digits.length >= 3 ? [`%${digits}%`] : []), `%${q}%`);
+      where.push(`(a.name LIKE ? OR a.reference LIKE ? OR a.ref_designation LIKE ?${digits.length >= 3 ? ' OR a.ref_phone LIKE ? OR a.id IN (SELECT appointment_id FROM appointment_people WHERE phone LIKE ?)' : ''} OR a.id IN (SELECT appointment_id FROM appointment_people WHERE name LIKE ?))`);
+      args.push(`%${q}%`, `%${q}%`, `%${q}%`, ...(digits.length >= 3 ? [`%${digits}%`, `%${digits}%`] : []), `%${q}%`);
     }
     const rows = db.prepare(`
       ${APPOINTMENT_SELECT} WHERE ${where.join(' AND ')}
@@ -144,6 +144,64 @@ export function adminRoutes({ db, notifier, config, now, jobs }) {
   router.post('/appointments/:id/hold', (req, res) => review(req, res, 'hold'));
   router.post('/appointments/:id/reject', (req, res) => review(req, res, 'rejected'));
   router.post('/appointments/:id/cancel', (req, res) => review(req, res, 'cancelled'));
+
+  // ---- Express pass ----------------------------------------------------------------
+  // An admin lets someone in today with just a name and WhatsApp number. The
+  // pass is approved at once, valid for the rest of today, and sent on WhatsApp.
+
+  // Photo taken by the admin for an express pass (optional).
+  router.post('/photos', express.raw({ type: ['image/jpeg', 'application/octet-stream'], limit: '450kb' }), (req, res) => {
+    res.status(201).json({ photo: photos.save(req.body) });
+  });
+
+  router.post('/express', (req, res) => {
+    const body = req.body ?? {};
+    const name = text(body.name, 'their name', 80);
+    const phone = parsePhone(body.phone, config.defaultCountryCode, 'their WhatsApp number');
+    const count = body.peopleCount === undefined || body.peopleCount === '' ? 1 : Number(body.peopleCount);
+    if (!Number.isInteger(count) || count < 1 || count > 10) throw new HttpError(400, 'Please choose between 1 and 10 people');
+    const photo = typeof body.photo === 'string' && body.photo ? body.photo : null;
+    if (photo && !photos.read(photo)) throw new HttpError(400, 'The photo was not saved. Please take it again.');
+    const reference = text(body.reference, 'the reference', 120, { required: false });
+    const refPhone = body.refPhone ? normalizePhone(body.refPhone, config.defaultCountryCode) : null;
+    if (body.refPhone && !refPhone) throw new HttpError(400, "Please check the reference's phone number");
+    const refDesignation = text(body.refDesignation, 'the designation', 80, { required: false });
+    const purposes = (Array.isArray(body.purposes) ? body.purposes : []).filter((p) => p in PURPOSES);
+    const description = text(body.description, 'the note', 500, { required: false });
+
+    const t = today();
+    const conflicts = db.prepare(`
+      SELECT a.date, a.period FROM appointment_people ap JOIN appointments a ON a.id = ap.appointment_id
+      WHERE ap.phone = ? AND a.status IN ${ACTIVE} AND a.date >= ?
+    `).all(phone, t);
+    if (conflicts.length && !body.force) {
+      throw new HttpError(409, `${name} already has an appointment on ${formatVisit(conflicts[0])}. Create an express pass anyway?`, { conflicts: conflicts.map(formatVisit) });
+    }
+
+    const period = currentPeriod(periods, nowInTimezone(timeZone, now()).time);
+    const id = transaction(db, () => {
+      let user = db.prepare('SELECT * FROM users WHERE phone = ?').get(phone);
+      user ??= db.prepare("INSERT INTO users (phone, name, role, status) VALUES (?, ?, 'visitor', 'active') RETURNING *").get(phone, name);
+      if (!user.name) db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, user.id);
+      // Express passes don't use public places; a closed session is made if the day has none.
+      const session = db.prepare('SELECT * FROM visit_sessions WHERE date = ? AND period = ?').get(t, period)
+        ?? db.prepare('INSERT INTO visit_sessions (date, period, capacity, is_closed) VALUES (?, ?, 0, 1) RETURNING *').get(t, period);
+      const appt = db.prepare(`
+        INSERT INTO appointments (user_id, session_id, date, period, name, phone, photo, reference, ref_phone, ref_designation, people_count, purposes, description,
+          status, express, created_by, reviewed_by, checkin_code, reminded_day_before, greeted, pass_sent_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 1, ?, ?, ?, 1, 1, datetime('now')) RETURNING id
+      `).get(user.id, session.id, t, period, name, phone, photo ?? user.photo, reference, refPhone, refDesignation || null, count,
+        JSON.stringify(purposes), description || null, req.user.id, req.user.id, crypto.randomBytes(18).toString('base64url'));
+      db.prepare('INSERT INTO appointment_people (appointment_id, name, phone, is_booker) VALUES (?, ?, ?, 1)').run(appt.id, name, phone);
+      return appt.id;
+    });
+
+    const appt = getAppointment(db, id);
+    notifier.sendPass(appt, 'Your express entry pass 🎟️',
+      `${name}, this is your express pass for today (${formatDay(t)}) for ${count} ${count === 1 ? 'person' : 'people'}. Show it at the entrance. It is valid only today and can be scanned only once.`);
+    notifier.emitToStaff('appointment', { id });
+    res.status(201).json({ appointment: viewsWithPeople(db, [appt])[0] });
+  });
 
   // ---- WhatsApp message to everyone visiting on a day ---------------------------------
 
@@ -255,7 +313,11 @@ export function adminRoutes({ db, notifier, config, now, jobs }) {
     const capacity = Number(req.body?.capacity);
     if (!Number.isInteger(capacity) || capacity < 1 || capacity > 10000) throw new HttpError(400, 'Please enter how many people each session can take');
     const weekdays = Array.isArray(req.body?.weekdays) ? req.body.weekdays.map(Number) : [0, 1, 2, 3, 4, 5, 6];
-    const insert = db.prepare('INSERT OR IGNORE INTO visit_sessions (date, period, capacity) VALUES (?, ?, ?)');
+    // Sessions made only for express passes (capacity 0) are opened up too.
+    const insert = db.prepare(`
+      INSERT INTO visit_sessions (date, period, capacity) VALUES (?, ?, ?)
+      ON CONFLICT(date, period) DO UPDATE SET capacity = excluded.capacity, is_closed = 0 WHERE visit_sessions.capacity = 0
+    `);
     let created = 0;
     let skipped = 0;
     transaction(db, () => {

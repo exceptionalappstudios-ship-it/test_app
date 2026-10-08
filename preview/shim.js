@@ -74,8 +74,6 @@ if (frame !== 'visitor') {
     const form = document.querySelector('[data-manual]');
     if (!form || form.dataset.helper) return;
     form.dataset.helper = '1';
-    const msg = document.querySelector('[data-msg]');
-    if (msg) msg.textContent = 'Camera is off in this preview';
     const box = document.createElement('div');
     box.className = 'card';
     box.innerHTML = '<h3 style="margin-bottom:2px">Preview: scan a pass</h3><p class="small muted" style="margin-top:0">There is no camera here. Tap a visitor\'s pass to scan it.</p><div class="stack" data-passes></div>';
@@ -91,9 +89,9 @@ if (frame !== 'visitor') {
       for (const p of passes.slice(0, 8)) {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = `btn ${p.used ? 'light' : 'blue'} block small`;
-        b.style.justifyContent = 'space-between';
-        b.innerHTML = `<span>${p.name} · ${p.people} · ${p.label}</span><span style="font-weight:500;opacity:.85">${STATE[p.state]}</span>`;
+        b.className = `btn ${p.used ? 'light' : 'blue'} block`;
+        b.style.cssText = 'justify-content:space-between;text-align:left;gap:12px;min-height:56px';
+        b.innerHTML = `<span style="min-width:0"><span style="display:block">${p.name}</span><span style="display:block;font-weight:500;font-size:.82rem;opacity:.85">${p.people} ${p.people === 1 ? 'person' : 'people'} · ${p.label}</span></span><span style="flex:0 0 auto;font-weight:600;font-size:.8rem;opacity:.9">${STATE[p.state]}</span>`;
         b.addEventListener('click', () => { form.code.value = p.code; form.requestSubmit(); });
         list.append(b);
       }

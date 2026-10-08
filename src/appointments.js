@@ -12,10 +12,11 @@ export const PURPOSES = {
 };
 
 export const APPOINTMENT_SELECT = `
-  SELECT a.*, cu.name AS checked_in_by_name, ru.name AS reviewed_by_name
+  SELECT a.*, cu.name AS checked_in_by_name, ru.name AS reviewed_by_name, bu.name AS created_by_name
   FROM appointments a
   LEFT JOIN users cu ON cu.id = a.checked_in_by
-  LEFT JOIN users ru ON ru.id = a.reviewed_by`;
+  LEFT JOIN users ru ON ru.id = a.reviewed_by
+  LEFT JOIN users bu ON bu.id = a.created_by`;
 
 export function loadPeople(db, ids) {
   const byAppt = new Map(ids.map((id) => [id, []]));
@@ -34,7 +35,9 @@ export function appointmentView(a, people = []) {
   return {
     id: a.id, status: a.status, name: a.name, phone: a.phone,
     photo: a.photo ? `/api/photos/${a.photo}` : null,
-    reference: a.reference, peopleCount: a.people_count, people,
+    reference: a.reference, refPhone: a.ref_phone ?? null, refDesignation: a.ref_designation ?? null,
+    express: Boolean(a.express), createdBy: a.created_by_name ?? null,
+    peopleCount: a.people_count, people,
     purposes: JSON.parse(a.purposes).map((p) => PURPOSES[p] ?? p), description: a.description,
     date: a.date, period: a.period, periodLabel: PERIOD_LABELS[a.period],
     adminNote: a.admin_note, reviewedBy: a.reviewed_by_name ?? null,
@@ -56,10 +59,16 @@ export function passState(a, { timeZone, periods, now }) {
   const today = nowInTimezone(timeZone, now).date;
   const start = periods[a.period].start;
   if (a.date < today) return { state: 'expired' };
-  if (a.date > today || minutesUntil(a.date, start, timeZone, now) > 0) {
+  if (a.date > today || (!a.express && minutesUntil(a.date, start, timeZone, now) > 0)) {
     return { state: 'not_yet', opensAt: formatClock(start), opensOn: a.date };
   }
   return { state: 'ready' };
+}
+
+// The session that is on now (or the nearest one today), for express passes.
+export function currentPeriod(periods, time) {
+  for (const p of ['morning', 'afternoon', 'evening']) if (time < periods[p].end) return p;
+  return 'evening';
 }
 
 // What security sees when scanning a pass.
@@ -76,8 +85,8 @@ export function scanResult(a, { timeZone, periods, now }) {
     return { result: 'wrong_day', canAdmit: false, adminOverride: true, message: `This pass is for ${formatVisit(a)}. It is not valid today.` };
   }
   const start = periods[a.period].start;
-  if (minutesUntil(a.date, start, timeZone, now) > 0) {
+  if (!a.express && minutesUntil(a.date, start, timeZone, now) > 0) {
     return { result: 'early', canAdmit: false, adminOverride: true, message: `${PERIOD_LABELS[a.period]} passes open at ${formatClock(start)}.` };
   }
-  return { result: 'ok', canAdmit: true, message: 'Valid pass' };
+  return { result: 'ok', canAdmit: true, message: a.express ? 'Valid express pass' : 'Valid pass' };
 }

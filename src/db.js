@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 PRAGMA foreign_keys = ON;
@@ -60,7 +60,11 @@ CREATE TABLE IF NOT EXISTS appointments (
   name                TEXT NOT NULL,
   phone               TEXT NOT NULL,     -- WhatsApp number the pass is sent to
   photo               TEXT,
-  reference           TEXT NOT NULL,
+  reference           TEXT NOT NULL,     -- who referred them (name)
+  ref_phone           TEXT,
+  ref_designation     TEXT,
+  express             INTEGER NOT NULL DEFAULT 0, -- created by an admin, pass valid all day
+  created_by          INTEGER REFERENCES users(id),
   people_count        INTEGER NOT NULL CHECK (people_count BETWEEN 1 AND 10),
   purposes            TEXT NOT NULL,     -- JSON array
   description         TEXT,
@@ -143,15 +147,16 @@ CREATE TABLE IF NOT EXISTS broadcasts (
 );
 `;
 
-// Databases from earlier versions (email/password accounts, timed slots)
+// Databases from the first versions (email/password accounts, timed slots)
 // don't map onto this model, so they're set aside rather than mixed in.
+// Version 3 onwards is upgraded in place (see MIGRATIONS).
 function setAsideOldDatabase(file) {
   if (file === ':memory:' || !fs.existsSync(file)) return;
   const db = new DatabaseSync(file);
   const version = db.prepare('PRAGMA user_version').get().user_version;
   const hasTables = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'appointments'").get();
   db.close();
-  if (!hasTables || version === SCHEMA_VERSION) return;
+  if (!hasTables || version >= 3) return;
   const backup = `${file}.before-v${SCHEMA_VERSION}`;
   for (const suffix of ['', '-wal', '-shm']) {
     if (fs.existsSync(file + suffix)) fs.renameSync(file + suffix, backup + suffix);
@@ -159,12 +164,22 @@ function setAsideOldDatabase(file) {
   console.warn(`Moved the database from the previous version to ${backup}`);
 }
 
+// Columns added after version 3.
+const MIGRATIONS = [
+  ['ref_phone', 'TEXT'],
+  ['ref_designation', 'TEXT'],
+  ['express', 'INTEGER NOT NULL DEFAULT 0'],
+  ['created_by', 'INTEGER REFERENCES users(id)'],
+];
+
 export function openDatabase(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   setAsideOldDatabase(file);
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA);
+  const columns = new Set(db.prepare('PRAGMA table_info(appointments)').all().map((c) => c.name));
+  for (const [name, type] of MIGRATIONS) if (!columns.has(name)) db.exec(`ALTER TABLE appointments ADD COLUMN ${name} ${type}`);
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return db;
 }

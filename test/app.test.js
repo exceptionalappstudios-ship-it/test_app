@@ -82,7 +82,7 @@ async function openSessions(a, body = {}) {
 const sessionId = async (date, period) => (await client()('/api/availability')).body.days.find((d) => d.date === date)?.sessions.find((s) => s.period === period)?.id;
 
 const booking = (sessionIdValue, extra = {}) => ({
-  sessionId: sessionIdValue, reference: 'Swami Ji, Bengaluru centre', peopleCount: 1, people: [],
+  sessionId: sessionIdValue, reference: 'Swami Ji', refPhone: '9988776655', refDesignation: 'Centre coordinator, Bengaluru', peopleCount: 1, people: [],
   purposes: ['blessings'], description: 'Blessings for my family', ...extra,
 });
 
@@ -167,7 +167,9 @@ test('booking asks for reference, people, purposes and checks everyone has only 
     assert.equal(res.status, 400, JSON.stringify(res.body));
     assert.match(res.body.error, pattern);
   };
-  await bad({ reference: '' }, /reference/);
+  await bad({ reference: '' }, /referred you/);
+  await bad({ refPhone: '' }, /reference's phone number/);
+  await bad({ refDesignation: '' }, /designation/);
   await bad({ purposes: [] }, /purpose/);
   await bad({ purposes: ['other'], description: '' }, /few words/);
   await bad({ peopleCount: 11 }, /between 1 and 10/);
@@ -184,12 +186,13 @@ test('booking asks for reference, people, purposes and checks everyone has only 
   assert.equal(blocked.status, 409);
   assert.equal(blocked.body.conflicts[0].phone, '+919999988888');
 
-  const ok = await v('/api/appointments', {
+  const okRes = await v('/api/appointments', {
     method: 'POST',
     body: booking(sid, { peopleCount: 3, phone: '+91 98765 00000', people: [{ name: 'Meera Rao', phone: '9123456780' }, { name: 'Kiran Rao', phone: '9123456781' }], purposes: ['blessings', 'life_event'] }),
   });
-  assert.equal(ok.status, 201, JSON.stringify(ok.body));
-  const appt = ok.body.appointment;
+  assert.equal(okRes.status, 201, JSON.stringify(okRes.body));
+  const appt = okRes.body.appointment;
+  assert.deepEqual([appt.reference, appt.refPhone, appt.refDesignation], ['Swami Ji', '+919988776655', 'Centre coordinator, Bengaluru']);
   assert.deepEqual([appt.peopleCount, appt.people.length, appt.phone, appt.periodLabel], [3, 2, '+919876500000', 'Morning']);
   assert.deepEqual(appt.purposes, ['Need blessings / Guidance', 'Life event (Marriage, Anniversary, Birthday, etc.)']);
   assert.ok(appt.photo);
@@ -328,7 +331,7 @@ test('dashboard, date list with search, and who checked people in', async () => 
   const v1 = await visitor('9800000001', 'Asha Rao');
   const v2 = await visitor('9800000002', 'Ravi Kumar');
   const a1 = (await v1('/api/appointments', { method: 'POST', body: booking(morning, { peopleCount: 3, people: [{ name: 'A', phone: '9700000001' }, { name: 'B', phone: '9700000002' }] }) })).body.appointment;
-  const a2 = (await v2('/api/appointments', { method: 'POST', body: booking(evening, { reference: 'Bengaluru centre' }) })).body.appointment;
+  const a2 = (await v2('/api/appointments', { method: 'POST', body: booking(evening, { refDesignation: 'Teacher, Mysuru' }) })).body.appointment;
   await a(`/api/admin/appointments/${a1.id}/approve`, { method: 'POST', body: {} });
   await a(`/api/admin/appointments/${a2.id}/approve`, { method: 'POST', body: {} });
   const s = await login('9811111111', { signupAs: 'security', name: 'Ramesh Guard' });
@@ -348,7 +351,8 @@ test('dashboard, date list with search, and who checked people in', async () => 
   assert.deepEqual([list.stats.approved, list.stats.checkedIn, list.stats.remaining, list.stats.remainingPeople], [2, 1, 1, 1]);
   assert.equal((await a('/api/admin/appointments?date=2030-01-10&checked=out')).body.appointments[0].name, 'Ravi Kumar');
   assert.equal((await a('/api/admin/appointments?date=2030-01-10&q=98000 00002')).body.appointments[0].name, 'Ravi Kumar');
-  assert.equal((await a('/api/admin/appointments?date=2030-01-10&q=bengaluru')).body.appointments.length, 2);
+  assert.equal((await a('/api/admin/appointments?date=2030-01-10&q=bengaluru')).body.appointments.length, 1);
+  assert.equal((await a('/api/admin/appointments?date=2030-01-10&q=swami')).body.appointments.length, 2);
 });
 
 test('admins can message everyone visiting on a day', async () => {
@@ -395,4 +399,64 @@ test('cross-site requests are blocked', async () => {
   const a = await admin();
   const res = await a('/api/admin/sessions', { method: 'POST', headers: { Origin: 'https://evil.example' }, body: {} });
   assert.equal(res.status, 403);
+});
+
+test('admins can create an express pass that is sent at once and valid all day', async () => {
+  const a = await admin();
+  at(IST('2030-01-10', '07:30')); // before the morning session opens
+  const missing = await a('/api/admin/express', { method: 'POST', body: { name: 'Gopal Rao' } });
+  assert.equal(missing.status, 400);
+
+  const photo = (await a('/api/admin/photos', { method: 'POST', raw: JPEG })).body.photo;
+  const res = await a('/api/admin/express', { method: 'POST', body: { name: 'Gopal Rao', phone: '9845011111', peopleCount: 3, photo } });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const appt = res.body.appointment;
+  assert.deepEqual([appt.status, appt.express, appt.peopleCount, appt.period, appt.createdBy, appt.passSent], ['approved', true, 3, 'morning', 'Seva Admin', true]);
+  assert.ok(appt.photo);
+  await flush();
+  const pass = sent.filter((x) => x.body?.template?.name === 'entry_pass').at(-1).body;
+  assert.equal(pass.to, '919845011111');
+  assert.match(templateText(sent.at(-1)), /express pass for today/);
+
+  // Valid straight away, even before the session opens; still only once.
+  const code = db.prepare('SELECT checkin_code FROM appointments WHERE id = ?').get(appt.id).checkin_code;
+  const scan = (await a('/api/staff/scan', { method: 'POST', body: { code } })).body;
+  assert.deepEqual([scan.result, scan.canAdmit, scan.message], ['ok', true, 'Valid express pass']);
+  assert.equal((await a('/api/staff/admit', { method: 'POST', body: { code } })).status, 200);
+  assert.equal((await a('/api/staff/scan', { method: 'POST', body: { code } })).body.result, 'used');
+
+  // The person can log in later and sees the pass in the app.
+  const gopal = await login('9845011111', { photo: false });
+  assert.equal((await gopal('/api/me')).body.appointments[0].express, true);
+
+  // Someone who already has an appointment needs confirmation.
+  const v = await visitor();
+  await openSessions(a);
+  await v('/api/appointments', { method: 'POST', body: booking(await sessionId('2030-01-11', 'morning')) });
+  const clash = await a('/api/admin/express', { method: 'POST', body: { name: 'Asha Rao', phone: '9876543210' } });
+  assert.equal(clash.status, 409);
+  assert.match(clash.body.error, /already has an appointment on Friday, 11 January \(Morning\)/);
+  assert.equal((await a('/api/admin/express', { method: 'POST', body: { name: 'Asha Rao', phone: '9876543210', force: true } })).status, 201);
+  // Opening the day later still opens the morning to the public.
+  assert.ok((await client()('/api/availability')).body.days.find((d) => d.date === '2030-01-10').sessions.some((x) => x.period === 'morning'));
+  // Visitors can't make express passes.
+  assert.equal((await v('/api/admin/express', { method: 'POST', body: { name: 'X', phone: '9000099999' } })).status, 403);
+});
+
+test('a database from the previous version is upgraded in place', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { DatabaseSync } = await import('node:sqlite');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mg-')), 'v3.db');
+  const old = new DatabaseSync(file);
+  old.exec(`CREATE TABLE appointments (id INTEGER PRIMARY KEY, user_id INTEGER, session_id INTEGER, date TEXT, period TEXT, name TEXT, phone TEXT,
+    photo TEXT, reference TEXT NOT NULL, people_count INTEGER, purposes TEXT, description TEXT, status TEXT, admin_note TEXT, reviewed_by INTEGER,
+    checkin_code TEXT, checked_in_at TEXT, checked_in_by INTEGER, reminded_day_before INTEGER DEFAULT 0, greeted INTEGER DEFAULT 0, pass_sent_at TEXT,
+    created_at TEXT, updated_at TEXT); INSERT INTO appointments (id, reference, name) VALUES (1, 'Kept', 'Old booking'); PRAGMA user_version = 3;`);
+  old.close();
+  const upgraded = openDatabase(file);
+  assert.equal(upgraded.prepare('SELECT reference, express, ref_phone FROM appointments').get().reference, 'Kept');
+  assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.ok(fs.existsSync(file));
 });

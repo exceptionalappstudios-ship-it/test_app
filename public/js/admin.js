@@ -1,9 +1,10 @@
 import {
   $, $$, api, esc, formatDate, formatShortDate, formatPhone, formatTime, formatWhen, addDays, plural, statusChip, photoTag,
-  contactButtons, toast, openSheet, confirmSheet, busy, throttle, createRouter, liveStream, homeFor, PERIOD_ICONS,
+  contactButtons, toast, openSheet, confirmSheet, busy, throttle, createRouter, goBack, liveStream, homeFor, PERIOD_ICONS,
 } from './common.js';
 import { icons } from './icons.js';
 import { renderLogin, renderProfileSetup } from './login.js';
+import { photoPicker } from './photo.js';
 import { renderChart, legendHtml } from './chart.js';
 
 const outlet = $('#app');
@@ -79,14 +80,17 @@ function apptDetails(a) {
     <div class="row">${photoTag(a.photo, a.name, 'lg')}<div class="grow">
       <div style="font-weight:800;font-size:1.1rem">${esc(a.name)}</div>
       <div class="small muted">${esc(formatPhone(a.phone))}</div>
-      <div style="margin-top:6px">${statusChip(a.status, a.checkedInAt)}</div></div>
+      <div style="margin-top:6px" class="chips">${statusChip(a.status, a.checkedInAt)}${a.express ? '<span class="status express">⚡ Express</span>' : ''}</div></div>
       <div class="contact" style="display:flex;flex-direction:column;gap:8px">${contactButtons(a.phone)}</div></div>
     <dl class="details">
       <dt>Day</dt><dd><strong>${esc(formatShortDate(a.date))} · ${esc(a.periodLabel)}</strong></dd>
       <dt>People</dt><dd><strong>${esc(plural(a.peopleCount, 'person', 'people'))}</strong></dd>
       ${a.people.length ? `<dt>With</dt><dd>${a.people.map((p) => `${esc(p.name)} · <a href="tel:${esc(p.phone)}">${esc(formatPhone(p.phone))}</a>`).join('<br>')}</dd>` : ''}
-      <dt>Reference</dt><dd>${esc(a.reference)}</dd>
-      <dt>Purpose</dt><dd>${a.purposes.map((p) => `<span class="tag">${esc(p)}</span>`).join(' ')}</dd>
+      ${a.reference || a.refPhone ? `<dt>Reference</dt><dd>
+        <div class="row" style="align-items:flex-start;gap:8px"><div class="grow"><strong>${esc(a.reference || '—')}</strong>${a.refDesignation ? `<br><span class="muted">${esc(a.refDesignation)}</span>` : ''}${a.refPhone ? `<br><span class="muted">${esc(formatPhone(a.refPhone))}</span>` : ''}</div>
+        ${a.refPhone ? `<div class="contact" style="display:flex;gap:6px">${contactButtons(a.refPhone)}</div>` : ''}</div></dd>` : ''}
+      ${a.express ? `<dt>Express pass</dt><dd>Created by ${esc(a.createdBy ?? 'an admin')}</dd>` : ''}
+      ${a.purposes.length ? `<dt>Purpose</dt><dd>${a.purposes.map((p) => `<span class="tag">${esc(p)}</span>`).join(' ')}</dd>` : ''}
       ${a.description ? `<dt>Details</dt><dd>${esc(a.description)}</dd>` : ''}
       ${a.adminNote ? `<dt>Note</dt><dd>${esc(a.adminNote)}</dd>` : ''}
       ${a.checkedInAt ? `<dt>Checked in</dt><dd><strong>${esc(formatTime(a.checkedInAt))}</strong>${a.checkedInBy ? ` by ${esc(a.checkedInBy)}` : ''}</dd>` : ''}
@@ -171,6 +175,7 @@ async function homeView(ctx) {
         <div class="kpi"><div class="l">Bookings</div><div class="v">${s.bookings}</div></div>
         <div class="kpi"><div class="l">Checked in</div><div class="v">${s.checkedInBookings}</div></div>
       </div>
+      <a class="btn blue block" href="#/express" style="margin-top:14px">⚡ Create express pass</a>
       <div style="margin-top:14px">
         ${s.pending ? `<a class="alert-link" href="#/requests"><span class="count">${s.pending}</span>New requests to review${icons.next}</a>` : ''}
         ${s.hold ? `<a class="alert-link" href="#/requests?hold"><span class="count violet">${s.hold}</span>Requests on hold${icons.next}</a>` : ''}
@@ -268,7 +273,7 @@ async function visitorsView(ctx) {
     list.innerHTML = appointments.length ? appointments.map((a) => `
       <div class="person" data-id="${a.id}" style="cursor:pointer">
         ${photoTag(a.photo, a.name)}
-        <div class="grow"><div class="name">${esc(a.name)}</div>
+        <div class="grow"><div class="name">${esc(a.name)}${a.express ? ' <span class="status express" style="font-size:.7rem;padding:2px 7px">⚡ Express</span>' : ''}</div>
           <div class="meta">${esc(a.periodLabel)} · ${esc(plural(a.peopleCount, 'person', 'people'))}${a.checkedInAt ? ` · in at ${esc(formatTime(a.checkedInAt))}${a.checkedInBy ? ` by ${esc(a.checkedInBy)}` : ''}` : ''}</div>
           <div style="margin-top:4px">${statusChip(a.status, a.checkedInAt)}</div></div>
         <div class="contact">${contactButtons(a.phone)}</div>
@@ -365,6 +370,7 @@ function moreView(ctx) {
   ctx.el.innerHTML = `
     <div class="card row">${photoTag(user.photo, user.name, 'lg')}<div class="grow"><div style="font-weight:800;font-size:1.1rem">${esc(user.name)}</div><div class="muted small">${esc(formatPhone(user.phone))} · Admin</div></div></div>
     <div class="card flush">
+      ${link('#/express', icons.ticket, 'Express pass', 'Let someone in today with just a name and number')}
       ${link('/security.html#/scan', icons.scan, 'Scan passes', 'Open the scanner')}
       ${link('#/sessions', icons.calendar, 'Open days and sessions', 'Choose days, Morning / Afternoon / Evening and places')}
       ${link('#/broadcast', icons.whatsapp, 'Send WhatsApp message', 'Tell a day\'s visitors about changes')}
@@ -508,6 +514,73 @@ async function outboxView(ctx) {
     <div class="meta">${esc(formatWhen(m.created_at))}${m.error ? ` · ${esc(m.error)}` : ''}</div></div></div>`).join('') : '<div class="empty">Nothing sent yet.</div>'}</div>`;
 }
 
+// ---- Express pass ----------------------------------------------------------------------
+
+async function expressView(ctx) {
+  header('Express pass', 'Let someone in today. The QR pass is sent on WhatsApp straight away.');
+  let photo = null;
+  let count = 1;
+  const purposes = new Set();
+  ctx.el.innerHTML = `
+    <form class="card" novalidate>
+      <label for="xn" style="margin-top:0">Name <span class="muted small">(required)</span></label>
+      <input id="xn" maxlength="80" autocomplete="off" placeholder="Full name">
+      <label for="xp">WhatsApp number <span class="muted small">(required)</span></label>
+      <div class="phone-field"><span>+91</span><input id="xp" type="tel" inputmode="tel" maxlength="20" placeholder="98765 43210"></div>
+      <div class="label">How many people?</div>
+      <div class="stepper"><button type="button" data-dec aria-label="Fewer">${icons.minus}</button><span class="n" data-count>1</span><button type="button" data-inc aria-label="More">${icons.plus}</button></div>
+      <details style="margin-top:18px">
+        <summary style="font-weight:700;cursor:pointer;padding:6px 0">More details <span class="muted small">(optional)</span></summary>
+        <div class="label">Photo</div>
+        <div data-photo></div>
+        <label for="xr">Reference name</label><input id="xr" maxlength="120">
+        <label for="xrp">Reference phone</label><div class="phone-field"><span>+91</span><input id="xrp" type="tel" inputmode="tel" maxlength="20"></div>
+        <label for="xrd">Reference designation</label><input id="xrd" maxlength="80" placeholder="For example: Teacher">
+        <div class="label">Purpose</div>
+        <div class="choices">${Object.entries(config.purposes).map(([k, l]) => `<button type="button" class="choice check" data-purpose="${k}"><span class="t" style="font-weight:600">${esc(l)}</span><span class="tick">${icons.check}</span></button>`).join('')}</div>
+        <label for="xd">Note</label><textarea id="xd" maxlength="500"></textarea>
+      </details>
+      <div data-error></div>
+      <div class="actions"><button class="btn block" type="submit">${icons.whatsapp} Create and send pass</button></div>
+    </form>`;
+  const form = $('form', ctx.el);
+  photoPicker($('[data-photo]', ctx.el), { prompt: 'Optional: a photo helps security recognise them.', onChange: (b) => { photo = b; } });
+  const setCount = (n) => { count = Math.max(1, Math.min(10, n)); $('[data-count]', ctx.el).textContent = count; };
+  $('[data-dec]', ctx.el).addEventListener('click', () => setCount(count - 1));
+  $('[data-inc]', ctx.el).addEventListener('click', () => setCount(count + 1));
+  $$('[data-purpose]', ctx.el).forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.purpose;
+    purposes.has(k) ? purposes.delete(k) : purposes.add(k);
+    b.classList.toggle('on', purposes.has(k));
+  }));
+  const submit = async (button, force = false) => {
+    const err = $('[data-error]', ctx.el);
+    err.innerHTML = '';
+    try {
+      let photoName = null;
+      if (photo) photoName = (await busy(button, () => api('/api/admin/photos', { method: 'POST', raw: photo }))).photo;
+      const { appointment: a } = await busy(button, () => api('/api/admin/express', { method: 'POST', body: {
+        name: $('#xn', ctx.el).value, phone: $('#xp', ctx.el).value, peopleCount: count, photo: photoName,
+        reference: $('#xr', ctx.el).value, refPhone: $('#xrp', ctx.el).value, refDesignation: $('#xrd', ctx.el).value,
+        purposes: [...purposes], description: $('#xd', ctx.el).value, force,
+      } }));
+      const { el } = openSheet(`<div class="center">
+        <div class="big-icon ok">${icons.checkCircle}</div>
+        <h2>Express pass sent</h2>
+        <p class="sub"><strong>${esc(a.name)}</strong> (${esc(plural(a.peopleCount, 'person', 'people'))}) will get the QR pass on WhatsApp at ${esc(formatPhone(a.phone))}. It is valid for the rest of today and can be scanned once.</p></div>
+        <div class="actions"><button class="btn light" data-close>Done</button><button class="btn" data-another>${icons.plus} Another pass</button></div>`, { onClose: () => expressView(ctx) });
+      $('[data-another]', el).addEventListener('click', () => $('[data-close]', el).click());
+    } catch (e) {
+      if (e.status === 409 && e.data?.conflicts) {
+        if (await confirmSheet({ title: 'Already has an appointment', message: e.message, confirm: 'Create express pass anyway' })) submit(button, true);
+        return;
+      }
+      err.innerHTML = `<div class="notice bad" style="margin-top:12px">${icons.alert}<span>${esc(e.message)}</span></div>`;
+    }
+  };
+  form.addEventListener('submit', (e) => { e.preventDefault(); submit($('button[type=submit]', form)); });
+}
+
 // ---- Boot -----------------------------------------------------------------------------
 
 function loginView(ctx) {
@@ -535,10 +608,11 @@ const router = createRouter({
     { path: /^#\/visitors$/, view: visitorsView, tab: 'visitors' },
     { path: /^#\/security$/, view: securityView, tab: 'security' },
     { path: /^#\/more$/, view: moreView, tab: 'more' },
-    { path: /^#\/sessions$/, view: sessionsView, tab: 'more' },
-    { path: /^#\/broadcast$/, view: broadcastView, tab: 'more' },
-    { path: /^#\/admins$/, view: adminsView, tab: 'more' },
-    { path: /^#\/outbox$/, view: outboxView, tab: 'more' },
+    { path: /^#\/express$/, view: expressView, tab: 'home', back: '#/home' },
+    { path: /^#\/sessions$/, view: sessionsView, tab: 'more', back: '#/more' },
+    { path: /^#\/broadcast$/, view: broadcastView, tab: 'more', back: '#/more' },
+    { path: /^#\/admins$/, view: adminsView, tab: 'more', back: '#/more' },
+    { path: /^#\/outbox$/, view: outboxView, tab: 'more', back: '#/more' },
   ],
   guard: (route) => {
     if (!user) return route.public ? null : '#/login';

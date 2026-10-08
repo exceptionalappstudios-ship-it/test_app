@@ -5,10 +5,10 @@
 // to see reminders, the greeting and the QR pass arrive.
 import QRCode from 'qrcode';
 import { nowInTimezone, minutesUntil, addDays, dayOfWeek, formatVisit, formatClock, formatDay, parsePeriodTimes, PERIODS, PERIOD_LABELS, DATE_RE } from '../src/time.js';
-import { PURPOSES, passState, scanResult } from '../src/appointments.js';
+import { PURPOSES, passState, scanResult, currentPeriod } from '../src/appointments.js';
 
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
-const STORE_KEY = 'meet-gurudev-preview-v2';
+const STORE_KEY = 'meet-gurudev-preview-v3';
 const periods = parsePeriodTimes();
 const CONFIG = { reminderTime: '18:00', greetingTime: '07:00' };
 const CONTACT = { phone: '+91 80 1234 5678', whatsapp: '+918012345678', address: 'Main Ashram Office, Bengaluru' };
@@ -59,7 +59,8 @@ function seed() {
     const date = addDays(t, d);
     for (const p of PERIODS) db.sessions.push({ id: nextId('sessions'), date, period: p, capacity: 40, is_closed: 0 });
   }
-  const refs = ['Swami Ji, Bengaluru centre', 'Art of Living, Pune', 'Family friend', 'Satsang group, Delhi', 'Teacher: Anita Rao'];
+  const refs = [['Swami Ji', '+919845098450', 'Centre coordinator, Bengaluru'], ['Anita Rao', '+919822011223', 'Teacher, Pune'], ['Dr. Mohan Iyer', '+919811022334', 'Trustee'],
+    ['Kiran Desai', '+919833044556', 'Satsang lead, Delhi'], ['Rekha Menon', '+919895066778', 'Volunteer coordinator']];
   const purposeSets = [['blessings'], ['life_event', 'blessings'], ['invitation'], ['project'], ['donation'], ['blessings', 'other']];
   const descs = ['Blessings for the family', "Daughter's wedding next month", 'Invite Gurudev to our school function', 'Rural water project proposal', 'Annual donation', 'Gratitude after recovery'];
   let n = 0;
@@ -67,7 +68,7 @@ function seed() {
     const size = 1 + (n % 4);
     const a = {
       id: nextId('appointments'), user_id: u.id, session_id: session.id, date: session.date, period: session.period,
-      name: u.name, phone: u.phone, photo: u.photo, reference: refs[n % refs.length], people_count: size,
+      name: u.name, phone: u.phone, photo: u.photo, reference: refs[n % refs.length][0], ref_phone: refs[n % refs.length][1], ref_designation: refs[n % refs.length][2], people_count: size, express: 0, created_by: null,
       people: Array.from({ length: size - 1 }, (_, i) => ({ name: `${['Anu', 'Ravi', 'Sita', 'Gopal'][i]} ${u.name.split(' ')[1]}`, phone: `+9199000${String(n * 10 + i).padStart(5, '0')}` })),
       purposes: purposeSets[n % purposeSets.length], description: descs[n % descs.length],
       status, admin_note: null, reviewed_by: status === 'pending' ? null : admin.id,
@@ -147,6 +148,7 @@ const periodOrder = (p) => PERIODS.indexOf(p);
 const bySession = (a, b) => a.date.localeCompare(b.date) || periodOrder(a.period) - periodOrder(b.period);
 const view = (a) => ({
   id: a.id, status: a.status, name: a.name, phone: a.phone, photo: a.photo, reference: a.reference,
+  refPhone: a.ref_phone ?? null, refDesignation: a.ref_designation ?? null, express: Boolean(a.express), createdBy: a.created_by ? userById(a.created_by)?.name : null,
   peopleCount: a.people_count, people: a.people.map(({ name, phone }) => ({ name, phone })),
   purposes: a.purposes.map((p) => PURPOSES[p] ?? p), description: a.description,
   date: a.date, period: a.period, periodLabel: PERIOD_LABELS[a.period], adminNote: a.admin_note,
@@ -252,7 +254,9 @@ on('POST', '/api/appointments/check', ({ body, user }) => {
 }, 'profile');
 
 on('POST', '/api/appointments', ({ body, user }) => {
-  const reference = text(body.reference, 'who referred you (reference)', 120);
+  const reference = text(body.reference, 'the name of the person who referred you', 120);
+  const refPhone = phone(body.refPhone, "your reference's phone number");
+  const refDesignation = text(body.refDesignation, "your reference's designation (for example: Teacher, Centre coordinator)", 80);
   const purposes = [...new Set(Array.isArray(body.purposes) ? body.purposes : [])].filter((p) => p in PURPOSES);
   if (!purposes.length) throw new HttpError(400, 'Please choose the purpose of your meeting');
   const description = text(body.description, 'a few words about your visit', 500, { required: purposes.includes('other') });
@@ -272,7 +276,8 @@ on('POST', '/api/appointments', ({ body, user }) => {
   if (count > left) throw new HttpError(409, left > 0 ? `Only ${left} places are left in this session.` : 'This session is full. Please choose another.');
   const a = {
     id: nextId('appointments'), user_id: user.id, session_id: s.id, date: s.date, period: s.period, name: user.name, phone: passPhone, photo: user.photo,
-    reference, people_count: count, people, purposes, description: description || null, status: 'pending', admin_note: null, reviewed_by: null,
+    reference, ref_phone: refPhone, ref_designation: refDesignation, express: 0, created_by: null,
+    people_count: count, people, purposes, description: description || null, status: 'pending', admin_note: null, reviewed_by: null,
     checkin_code: null, checked_in_at: null, checked_in_by: null, reminded_day_before: 0, greeted: 0, pass_sent_at: null, created_at: sqlNow(), updated_at: sqlNow(),
   };
   db.appointments.push(a);
@@ -374,7 +379,7 @@ on('GET', '/api/admin/appointments', ({ query }) => {
   if (query.status) rows = rows.filter((a) => a.status === query.status);
   if (query.checked === 'in') rows = rows.filter((a) => a.status === 'approved' && a.checked_in_at);
   if (query.checked === 'out') rows = rows.filter((a) => a.status === 'approved' && !a.checked_in_at);
-  if (q) rows = rows.filter((a) => a.name.toLowerCase().includes(q) || a.reference.toLowerCase().includes(q) || a.people.some((p) => p.name.toLowerCase().includes(q))
+  if (q) rows = rows.filter((a) => a.name.toLowerCase().includes(q) || a.reference.toLowerCase().includes(q) || (a.ref_designation ?? '').toLowerCase().includes(q) || (digits.length >= 3 && (a.ref_phone ?? '').includes(digits)) || a.people.some((p) => p.name.toLowerCase().includes(q))
     || (digits.length >= 3 && [a.phone, ...a.people.map((p) => p.phone)].some((p) => p.includes(digits))));
   rows.sort((a, b) => bySession(a, b) || Number(Boolean(a.checked_in_at)) - Number(Boolean(b.checked_in_at)) || a.id - b.id);
   let stats = null;
@@ -418,6 +423,43 @@ for (const [action, status] of [['approve', 'approved'], ['hold', 'hold'], ['rej
     return { appointment: view(a) };
   }, 'admin');
 }
+
+on('POST', '/api/admin/photos', ({ body }) => {
+  if (typeof body !== 'string' || !body.startsWith('data:image/jpeg')) throw new HttpError(400, 'Please take the photo again');
+  const name = `p${nextId('photos')}`;
+  db.photos = { ...(db.photos ?? {}), [name]: body };
+  return { photo: name, status: 201 };
+}, 'admin');
+on('POST', '/api/admin/express', ({ body, user: admin }) => {
+  const name = text(body.name, 'their name', 80);
+  const p = phone(body.phone, 'their WhatsApp number');
+  const count = body.peopleCount ? Number(body.peopleCount) : 1;
+  if (!Number.isInteger(count) || count < 1 || count > 10) throw new HttpError(400, 'Please choose between 1 and 10 people');
+  const clash = db.appointments.find((a) => ACTIVE.includes(a.status) && a.date >= today() && [a.phone, ...a.people.map((x) => x.phone)].includes(p));
+  if (clash && !body.force) throw new HttpError(409, `${name} already has an appointment on ${formatVisit(clash)}. Create an express pass anyway?`, { conflicts: [formatVisit(clash)] });
+  let u = db.users.find((x) => x.phone === p);
+  if (!u) { u = { id: nextId('users'), phone: p, name, photo: null, role: 'visitor', status: 'active', created_at: sqlNow(), reviewed_by: null }; db.users.push(u); }
+  const t = today();
+  const period = currentPeriod(periods, clock());
+  let s = db.sessions.find((x) => x.date === t && x.period === period);
+  if (!s) { s = { id: nextId('sessions'), date: t, period, capacity: 0, is_closed: 1 }; db.sessions.push(s); }
+  const a = {
+    id: nextId('appointments'), user_id: u.id, session_id: s.id, date: t, period, name, phone: p, photo: (body.photo && db.photos?.[body.photo]) || u.photo,
+    reference: text(body.reference, 'reference', 120, { required: false }), ref_phone: body.refPhone ? normalizePhone(body.refPhone) : null,
+    ref_designation: text(body.refDesignation, 'designation', 80, { required: false }) || null, people_count: count, people: [],
+    purposes: (body.purposes ?? []).filter((x) => x in PURPOSES), description: text(body.description, 'note', 500, { required: false }) || null,
+    status: 'approved', express: 1, created_by: admin.id, admin_note: null, reviewed_by: admin.id, checkin_code: code(), checked_in_at: null, checked_in_by: null,
+    reminded_day_before: 1, greeted: 1, pass_sent_at: sqlNow(), created_at: sqlNow(), updated_at: sqlNow(),
+  };
+  db.appointments.push(a);
+  const msg = `${name}, this is your express pass for today (${formatDay(t)}) for ${count} ${count === 1 ? 'person' : 'people'}. Show it at the entrance. It is valid only today and can be scanned only once.`;
+  const n = { id: nextId('notifications'), user_id: u.id, appointment_id: a.id, title: 'Your express entry pass 🎟️', body: msg, read_at: null, created_at: sqlNow() };
+  db.notifications.push(n);
+  emitToUser(u.id, 'notification', n);
+  whatsapp('pass', p, `[QR code image] Your express entry pass 🎟️\n${msg}`);
+  emitToStaff('appointment');
+  return { appointment: view(a), status: 201 };
+}, 'admin');
 
 on('POST', '/api/admin/broadcast', ({ body, user }) => {
   const date = DATE_RE.test(body.date ?? '') ? body.date : null;
@@ -492,7 +534,9 @@ on('POST', '/api/admin/sessions', ({ body }) => {
   for (let d = fromDate; d <= toDate; d = addDays(d, 1)) {
     if (!weekdays.includes(dayOfWeek(d))) continue;
     for (const p of chosen) {
-      if (db.sessions.some((s) => s.date === d && s.period === p)) { skipped++; continue; }
+      const existing = db.sessions.find((s) => s.date === d && s.period === p);
+      if (existing && existing.capacity === 0) { existing.capacity = capacity; existing.is_closed = 0; created++; continue; }
+      if (existing) { skipped++; continue; }
       db.sessions.push({ id: nextId('sessions'), date: d, period: p, capacity, is_closed: 0 });
       created++;
     }

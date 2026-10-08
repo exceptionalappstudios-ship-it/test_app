@@ -5,9 +5,9 @@ A simple, fast, mobile-first web app (installable on phones) for visits to meet 
 **Visitors** (`/`)
 - Log in with their **WhatsApp number and a one-time code**. First time: add name and a **face photo**. The phone finds
   the face, crops around it and compresses it (~30 KB) so security can recognise them.
-- Book a **day** and **Morning / Afternoon / Evening** (no times shown), then answer: reference (required), how many people
-  (1–10), the WhatsApp number for the pass, purpose (blessings / guidance, invitation, project proposal, donation, life event,
-  other) and a few words about the visit.
+- Book a **day** and **Morning / Afternoon / Evening** (no times shown), then answer: who referred them (**name, phone number
+  and designation**, all required, so the ashram can call to confirm), how many people (1–10), the WhatsApp number for the
+  pass, purpose (blessings / guidance, invitation, project proposal, donation, life event, other) and a few words about the visit.
 - Add the **name and number of each extra person**. Everyone can have only **one upcoming appointment**. If someone already
   has one, the app says when, and asks to cancel it or remove the person.
 - Updates **on WhatsApp and in the app**: request received, confirmed, reminder the day before, greeting on the day, and
@@ -21,14 +21,18 @@ A simple, fast, mobile-first web app (installable on phones) for visits to meet 
 **Admins** (`/admin.html`)
 - **Dashboard**: people checked in vs expected, Morning / Afternoon / Evening progress, a 14-day chart, recent check-ins with
   the security person who let them in. Updates live.
-- **Requests**: Approve, **Hold** (separate list to decide later) or Decline.
+- **Requests**: Approve, **Hold** (separate list to decide later) or Decline. The reference shows with one-tap call and
+  WhatsApp so admins can check it.
+- **Express pass**: let someone in today with just a **name and WhatsApp number** (photo, group size, reference and purpose
+  optional). The QR pass is sent on WhatsApp at once and works for the rest of the day, scanned once.
 - **Visitors**: any day's list with search, filters (not arrived / checked in / …), counts, and one-tap **call** and **WhatsApp**.
   Admins can also check someone in.
 - **Security**: approve, search, call/WhatsApp, remove access.
 - **More**: open days and set places per session, **send a WhatsApp message to everyone visiting on a day** (change of time,
   venue…), add admins, WhatsApp delivery log, and the scanner.
 
-Everyone uses the same login. After logging in, each person sees the app for their role.
+Everyone uses the same login. After logging in, each person sees the app for their role. Inner screens have a back arrow,
+and the phone's Back button steps back through the booking and closes pop-ups.
 
 ## Try it on your computer
 

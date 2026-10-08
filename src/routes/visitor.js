@@ -98,7 +98,9 @@ export function visitorRoutes({ db, notifier, config, now }) {
   router.post('/appointments', requireProfile, (req, res) => {
     const body = req.body ?? {};
     const user = req.user;
-    const reference = text(body.reference, 'who referred you (reference)', 120);
+    const reference = text(body.reference, 'the name of the person who referred you', 120);
+    const refPhone = parsePhone(body.refPhone, config.defaultCountryCode, "your reference's phone number");
+    const refDesignation = text(body.refDesignation, "your reference's designation (for example: Teacher, Centre coordinator)", 80);
     const purposes = [...new Set(Array.isArray(body.purposes) ? body.purposes : [])].filter((p) => p in PURPOSES);
     if (!purposes.length) throw new HttpError(400, 'Please choose the purpose of your meeting');
     const description = text(body.description, 'a few words about your visit', 500, { required: purposes.includes('other') });
@@ -119,9 +121,9 @@ export function visitorRoutes({ db, notifier, config, now }) {
       }
 
       const appt = db.prepare(`
-        INSERT INTO appointments (user_id, session_id, date, period, name, phone, photo, reference, people_count, purposes, description)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
-      `).get(user.id, session.id, session.date, session.period, user.name, passPhone, user.photo, reference, count, JSON.stringify(purposes), description || null);
+        INSERT INTO appointments (user_id, session_id, date, period, name, phone, photo, reference, ref_phone, ref_designation, people_count, purposes, description)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+      `).get(user.id, session.id, session.date, session.period, user.name, passPhone, user.photo, reference, refPhone, refDesignation, count, JSON.stringify(purposes), description || null);
       const addPerson = db.prepare('INSERT INTO appointment_people (appointment_id, name, phone, is_booker) VALUES (?, ?, ?, ?)');
       addPerson.run(appt.id, user.name, passPhone, 1);
       if (user.phone !== passPhone) addPerson.run(appt.id, user.name, user.phone, 1);

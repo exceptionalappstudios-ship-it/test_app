@@ -73,7 +73,11 @@ export function toast(message) {
   setTimeout(() => el.remove(), 4500);
 }
 
-// Bottom sheet; returns { el, close }.
+// Bottom sheet; returns { el, close }. The phone's Back button closes it.
+const openSheets = [];
+window.addEventListener('popstate', () => openSheets.at(-1)?.close(true));
+export function closeAllSheets() { while (openSheets.length) openSheets.at(-1).close(true); }
+
 export function openSheet(html, { onClose } = {}) {
   const backdrop = document.createElement('div');
   backdrop.className = 'backdrop';
@@ -82,8 +86,21 @@ export function openSheet(html, { onClose } = {}) {
   sheet.setAttribute('role', 'dialog');
   sheet.innerHTML = `<div class="grab"></div>${html}`;
   document.body.append(backdrop, sheet);
+  history.pushState({ sheet: true }, '');
   let closed = false;
-  const close = () => { if (closed) return; closed = true; backdrop.remove(); sheet.remove(); onClose?.(); };
+  const entry = {
+    close(fromBack = false) {
+      if (closed) return;
+      closed = true;
+      openSheets.splice(openSheets.indexOf(entry), 1);
+      backdrop.remove();
+      sheet.remove();
+      if (!fromBack && history.state?.sheet) history.back();
+      onClose?.();
+    },
+  };
+  openSheets.push(entry);
+  const close = () => entry.close();
   backdrop.addEventListener('click', close);
   sheet.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });
   return { el: sheet, close };
@@ -123,18 +140,36 @@ export function throttle(fn, ms) {
 
 // Each view gets a context: `el` to render into, `isCurrent()` to drop stale
 // async results, and `onCleanup(fn)` for timers, streams and cameras.
+// Routes with `back` (a hash, or a function returning one) show a back arrow.
+const visited = [];
+// Swaps the current screen without adding a history entry. Built from the
+// page's own address so it also works inside embedded documents.
+export function replaceHash(hash) {
+  location.replace(location.href.split('#')[0] + hash);
+}
+export function goBack(fallback) {
+  if (visited.length > 1) history.back();
+  else replaceHash(fallback);
+}
+
 export function createRouter({ outlet, routes, fallback, guard, onChange }) {
   let current = null;
+  const backBtn = document.getElementById('back');
+  backBtn?.addEventListener('click', () => current?.back && goBack(current.back));
   async function run() {
     current?.cleanups.forEach((fn) => fn());
+    closeAllSheets();
     const hash = location.hash || fallback;
+    if (visited.at(-2) === hash) visited.pop(); else if (visited.at(-1) !== hash) visited.push(hash);
     const ctx = { el: outlet, cleanups: [], isCurrent: () => current === ctx, onCleanup: (fn) => ctx.cleanups.push(fn) };
     current = ctx;
     for (const route of routes) {
       const match = hash.match(route.path);
       if (!match) continue;
       const redirect = guard?.(route, hash);
-      if (redirect && redirect !== hash) { location.hash = redirect; return; }
+      if (redirect && redirect !== hash) { visited.pop(); replaceHash(redirect); return; }
+      ctx.back = typeof route.back === 'function' ? route.back(...match.slice(1)) : route.back;
+      backBtn?.classList.toggle('hidden', !ctx.back);
       onChange?.(route, hash);
       window.scrollTo(0, 0);
       outlet.innerHTML = '<div class="card"><div class="spinner"></div></div>';

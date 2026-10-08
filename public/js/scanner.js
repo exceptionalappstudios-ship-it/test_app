@@ -18,6 +18,7 @@ function visitorCard(a) {
   return `<div class="visitor-id">
     ${photoTag(a.photo, a.name, 'xl')}
     <div class="who">${esc(a.name)}</div>
+    ${a.express ? '<div style="margin-top:6px"><span class="status express">⚡ Express pass</span></div>' : ''}
     <div class="count">${icons.users.replace('<svg', '<svg width="22" height="22"')} ${esc(plural(a.peopleCount, 'person', 'people'))}</div>
     ${a.people.length ? `<p class="small muted" style="margin:10px 0 0">With: ${a.people.map((p) => esc(p.name)).join(', ')}</p>` : ''}
     <p class="small muted" style="margin:6px 0 0">${esc(formatDate(a.date))} · ${esc(a.periodLabel)}</p>
@@ -44,7 +45,7 @@ export function showScanResult(body, { isAdmin = false } = {}) {
       const a = r.appointment;
       if (r.result === 'ok') {
         vibrate(60);
-        el.innerHTML = `<div class="grab"></div>${verdict('ok', icons.checkCircle, 'Valid pass', 'Check the face matches the photo')}${visitorCard(a)}
+        el.innerHTML = `<div class="grab"></div>${verdict('ok', icons.checkCircle, a.express ? 'Valid express pass' : 'Valid pass', a.photo && !a.photo.startsWith('data:image/svg') ? 'Check the face matches the photo' : 'No photo on this pass. Please check an ID card.')}${visitorCard(a)}
           <div class="actions"><button class="btn block" data-admit style="min-height:60px;font-size:1.15rem">${icons.check} Allow entry (${esc(plural(a.peopleCount, 'person', 'people'))})</button></div>
           <button class="btn ghost block" data-close>Cancel</button>`;
       } else if (r.result === 'used') {
@@ -77,13 +78,16 @@ export function showScanResult(body, { isAdmin = false } = {}) {
 // Renders the camera scanner into `el`. Returns a stop() function.
 export async function startScanner(el, { isAdmin = false, onDone } = {}) {
   el.innerHTML = `
-    <div class="scanner"><video playsinline muted></video><div class="frame"></div><div class="msg" data-msg>Starting camera…</div></div>
+    <div class="scanner"><video playsinline muted></video><div class="frame"></div><div class="msg" data-msg>Starting camera…</div>
+      <div class="off-msg">${icons.camera}<span data-off></span></div></div>
     <form class="card" data-manual style="margin-top:14px">
       <label for="code" style="margin-top:0">Camera not working? Type the code</label>
       <div class="row"><input id="code" name="code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Code from the pass"><button class="btn small" style="min-height:50px">Check</button></div>
     </form>`;
   const video = $('video', el);
   const msg = $('[data-msg]', el);
+  // Without a camera, show the message on its own instead of over the frame.
+  const noCamera = (text) => { $('.scanner', el).classList.add('off'); $('[data-off]', el).textContent = text; };
   let stream = null;
   let paused = false;
   let stopped = false;
@@ -108,13 +112,13 @@ export async function startScanner(el, { isAdmin = false, onDone } = {}) {
 
   const stop = () => { stopped = true; cancelAnimationFrame(raf); stream?.getTracks().forEach((t) => t.stop()); };
   if (!navigator.mediaDevices?.getUserMedia) {
-    msg.textContent = 'Camera is not available. Type the code below.';
+    noCamera('Camera is not available on this phone. Type the code below.');
     return stop;
   }
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
   } catch {
-    msg.textContent = 'Please allow camera access to scan, or type the code below.';
+    noCamera('Please allow camera access to scan, or type the code below.');
     return stop;
   }
   if (stopped) { stop(); return stop; }
