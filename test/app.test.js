@@ -75,7 +75,11 @@ async function login(phone, { signupAs, name, photo = true } = {}) {
   return c;
 }
 
-const admin = () => login('+919000000001');
+async function admin() {
+  const c = client();
+  assert.equal((await c('/api/auth/password', { method: 'POST', body: { phone: '9000000001', password: 'test-pass' } })).status, 200);
+  return c;
+}
 const visitor = (phone = '9876543210', name = 'Asha Rao') => login(phone, { name });
 
 async function openSessions(a, body = {}) {
@@ -467,6 +471,9 @@ test('admins log in with their number and the admin password', async () => {
   const v = await visitor();
   const notAdmin = await tryLogin('9876543210', 'test-pass');
   assert.deepEqual([notAdmin.status, notAdmin.body.error], [400, 'Wrong number or password.']);
+  // Admin numbers can't use WhatsApp codes (codes may be shown on screen before WhatsApp is set up).
+  const otp = await c('/api/auth/otp/request', { method: 'POST', body: { phone: '9000000001' } });
+  assert.deepEqual([otp.status, otp.body.error], [400, 'This is an admin number. Please log in on the admin page with your password.']);
   const ok = await tryLogin('90000 00001', 'test-pass');
   assert.deepEqual([ok.status, ok.body.user.role, ok.body.user.profileComplete], [200, 'admin', true]); // no photo needed
   assert.equal((await c('/api/admin/dashboard')).status, 200);

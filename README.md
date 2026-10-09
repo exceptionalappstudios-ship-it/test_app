@@ -92,8 +92,8 @@ The repo includes `railway.json` (start command, health check at `/healthz`, res
 5. **Settings → Networking → Generate Domain** (or add your own domain).
 6. Keep **one replica**: the database is a single file on the volume.
 
-Until WhatsApp is set up, login codes appear in the service's **Deploy Logs**. Don't set `SHOW_OTP_ON_SCREEN` on a public site:
-anyone could log in as anyone, including the admin.
+Until WhatsApp is set up, login codes are **shown on screen** (admins use the password, never a code). This lets anyone
+log in with any visitor or security number, so connect WhatsApp before real use, or set `SHOW_OTP_ON_SCREEN=0`.
 
 - Host it with **HTTPS** and set `APP_URL`. The camera scanner and phone notifications need HTTPS.
 - Data is stored in `data/` (`appointments.db` and `photos/`). **Back up this folder.**

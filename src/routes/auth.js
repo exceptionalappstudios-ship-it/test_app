@@ -15,9 +15,10 @@ export function authRoutes({ db, whatsapp, notifier, config, photos }) {
     const phone = parsePhone(req.body?.phone, config.defaultCountryCode);
     perIp(req.ip);
     perPhone(phone);
+    const user = findByPhone.get(phone);
+    if (user?.role === 'admin') throw new HttpError(400, 'This is an admin number. Please log in on the admin page with your password.');
     const code = issueOtp(db, phone);
     whatsapp.sendOtp(phone, code);
-    const user = findByPhone.get(phone);
     res.json({
       phone,
       isNew: !user,
@@ -33,6 +34,7 @@ export function authRoutes({ db, whatsapp, notifier, config, photos }) {
     verifyLimit(`${req.ip}|${phone}`);
     checkOtp(db, phone, req.body?.code);
     let user = findByPhone.get(phone);
+    if (user?.role === 'admin') throw new HttpError(400, 'This is an admin number. Please log in on the admin page with your password.');
     if (!user) {
       const security = req.body?.signupAs === 'security';
       user = db.prepare('INSERT INTO users (phone, role, status) VALUES (?, ?, ?) RETURNING *')

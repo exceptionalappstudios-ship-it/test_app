@@ -29,7 +29,9 @@ const config = {
     language: env.WHATSAPP_TEMPLATE_LANG || 'en',
   } : null,
   photosDir: path.join(dataDir, 'photos'),
-  showOtpForTesting: env.SHOW_OTP_ON_SCREEN === '1',
+  // Until WhatsApp is connected, login codes are shown on screen (never for
+  // admins, who use the password). SHOW_OTP_ON_SCREEN=0 turns this off.
+  showOtpForTesting: env.SHOW_OTP_ON_SCREEN !== '0',
   logOutbound: true,
   // Behind a hosting proxy, trust one hop so rate limits see each visitor's own IP.
   references: REFERENCES,
