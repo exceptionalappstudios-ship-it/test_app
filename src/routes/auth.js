@@ -1,7 +1,7 @@
 import express from 'express';
 import { issueOtp, checkOtp, publicUser, startSession, endSession, requireUser } from '../auth.js';
 import { HttpError, text, phone as parsePhone, rateLimiter } from '../http.js';
-import { checkPassword } from '../references.js';
+import { checkPassword, findReference } from '../references.js';
 
 export function authRoutes({ db, whatsapp, notifier, config, photos }) {
   const router = express.Router();
@@ -74,7 +74,13 @@ export function authRoutes({ db, whatsapp, notifier, config, photos }) {
   router.patch('/me', requireUser, (req, res) => {
     const name = text(req.body?.name, 'your full name', 80);
     if (name.length < 2) throw new HttpError(400, 'Please enter your full name');
-    const user = db.prepare('UPDATE users SET name = ? WHERE id = ? RETURNING *').get(name, req.user.id);
+    let user = db.prepare('UPDATE users SET name = ? WHERE id = ? RETURNING *').get(name, req.user.id);
+    // Security staff choose the reference who will approve them (only while waiting).
+    if (user.role === 'security' && user.status === 'pending' && req.body?.referenceId !== undefined) {
+      const ref = findReference(config.references, req.body.referenceId);
+      if (!ref) throw new HttpError(400, 'Please choose your reference from the list');
+      user = db.prepare('UPDATE users SET reference_id = ? WHERE id = ? RETURNING *').get(ref.id, user.id);
+    }
     if (user.role === 'security') notifier.emitToStaff('security');
     res.json({ user: publicUser(user) });
   });

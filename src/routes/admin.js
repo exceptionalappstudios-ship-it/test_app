@@ -14,6 +14,8 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
   const today = () => nowInTimezone(timeZone, now()).date;
   const dateParam = (v, fallback) => (DATE_RE.test(v ?? '') ? v : fallback);
   router.use(requireAdmin);
+  // Each admin is one of the references; security staff ask one of them for approval.
+  const myReference = (req) => referenceOfPhone(config.references, req.user.phone)?.id ?? null;
 
   // ---- Dashboard ----------------------------------------------------------------
 
@@ -36,9 +38,9 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
       SELECT
         (SELECT COUNT(*) FROM appointments WHERE status = 'pending' AND date >= ?) AS pending,
         (SELECT COUNT(*) FROM appointments WHERE status = 'hold' AND date >= ?) AS hold,
-        (SELECT COUNT(*) FROM users WHERE role = 'security' AND status = 'pending' AND name IS NOT NULL AND photo IS NOT NULL) AS securityPending,
+        (SELECT COUNT(*) FROM users WHERE role = 'security' AND status = 'pending' AND name IS NOT NULL AND photo IS NOT NULL AND reference_id = ?) AS securityPending,
         (SELECT COUNT(*) FROM users WHERE role = 'security' AND status = 'active') AS securityActive
-    `).get(t, t);
+    `).get(t, t, myReference(req));
 
     const recent = db.prepare(`${APPOINTMENT_SELECT} WHERE a.date = ? AND a.checked_in_at IS NOT NULL ORDER BY a.checked_in_at DESC LIMIT 12`).all(date);
 
@@ -216,7 +218,10 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
 
   // ---- Security staff ------------------------------------------------------------------
 
-  const staffView = (u) => ({ ...publicUser(u), createdAt: u.created_at, reviewedBy: u.reviewed_by_name ?? null, checkinsToday: u.checkins_today ?? 0 });
+  const staffView = (u) => ({
+    ...publicUser(u), createdAt: u.created_at, reviewedBy: u.reviewed_by_name ?? null, checkinsToday: u.checkins_today ?? 0,
+    reference: findReference(config.references, u.reference_id)?.name ?? null,
+  });
 
   router.get('/security', (req, res) => {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -226,15 +231,20 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
         (SELECT COUNT(*) FROM appointments a WHERE a.checked_in_by = u.id AND a.date = ?) AS checkins_today
       FROM users u LEFT JOIN users r ON r.id = u.reviewed_by
       WHERE u.role = 'security' AND u.name IS NOT NULL AND u.photo IS NOT NULL
+        AND (u.status != 'pending' OR u.reference_id = ?)
       ${q ? `AND (u.name LIKE ?${digits ? ' OR u.phone LIKE ?' : ''})` : ''}
       ORDER BY CASE u.status WHEN 'pending' THEN 0 WHEN 'active' THEN 1 ELSE 2 END, u.name
-    `).all(today(), ...(q ? [`%${q}%`, ...(digits ? [`%${digits}%`] : [])] : []));
+    `).all(today(), myReference(req), ...(q ? [`%${q}%`, ...(digits ? [`%${digits}%`] : [])] : []));
     res.json({ staff: rows.map(staffView) });
   });
 
   function setSecurity(req, res, status) {
     const u = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'security'").get(Number(req.params.id));
     if (!u) throw new HttpError(404, 'Security staff member not found');
+    // A new request can only be answered by the reference it was sent to.
+    if (u.status === 'pending' && u.reference_id !== myReference(req)) {
+      throw new HttpError(403, `Only ${findReference(config.references, u.reference_id)?.name ?? 'their reference'} can approve this request.`);
+    }
     db.prepare("UPDATE users SET status = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(status, req.user.id, u.id);
     const msg = {
       active: ['Scanner access approved ✅', 'You can now open the app and scan visitor passes.'],

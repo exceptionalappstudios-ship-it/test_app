@@ -84,8 +84,10 @@ export function renderLogin(el, { signupAs = 'visitor', onDone, footer = '' }) {
   phoneStep();
 }
 
-// Name + face photo. Everyone fills this in once.
-export function renderProfileSetup(el, user, { onDone, intro = 'Please tell us your name and add your photo. This is needed only once.' }) {
+// Name + face photo. Everyone fills this in once. Security staff also choose
+// the reference who will approve them (`references`), and their photo must
+// show a face (`requireFace`).
+export function renderProfileSetup(el, user, { onDone, references = null, requireFace = false, intro = 'Please tell us your name and add your photo. This is needed only once.' }) {
   let blob = null;
   el.innerHTML = `
     <form class="card narrow" novalidate>
@@ -93,6 +95,13 @@ export function renderProfileSetup(el, user, { onDone, intro = 'Please tell us y
       <p class="sub">${esc(intro)}</p>
       <label for="name">Full name</label>
       <input id="name" name="name" autocomplete="name" maxlength="80" required value="${esc(user.name ?? '')}" placeholder="As on your ID card">
+      ${references ? `
+      <label for="referenceId">Your reference</label>
+      <select id="referenceId">
+        <option value="">Choose your reference</option>
+        ${references.map((r) => `<option value="${esc(r.id)}" ${r.id === user.referenceId ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}
+      </select>
+      <div class="hint">Only this person will get your request and can approve it.</div>` : ''}
       <div class="label">Your photo</div>
       <div data-photo></div>
       <div data-error></div>
@@ -100,16 +109,20 @@ export function renderProfileSetup(el, user, { onDone, intro = 'Please tell us y
     </form>`;
   const form = $('form', el);
   const save = $('button[type=submit]', form);
-  photoPicker($('[data-photo]', el), { current: user.photo, onChange: (b) => { blob = b; } });
+  const hasPhoto = Boolean(user.photo);
+  photoPicker($('[data-photo]', el), { current: user.photo, requireFace, onChange: (b) => { blob = b; } });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const err = $('[data-error]', el);
     const name = form.name.value.trim();
-    const problem = name.length < 2 ? 'Please enter your full name.' : !blob && !user.photo ? 'Please add your photo.' : '';
+    const referenceId = references ? $('#referenceId', el).value : undefined;
+    const problem = name.length < 2 ? 'Please enter your full name.'
+      : references && !referenceId ? 'Please choose your reference.'
+      : !blob && !hasPhoto ? (requireFace ? 'Please take a photo of your face. You can continue only when your face is found.' : 'Please add your photo.') : '';
     err.innerHTML = problem ? `<div class="notice bad" style="margin-top:12px">${icons.alert}<span>${esc(problem)}</span></div>` : '';
     if (problem) return;
     try {
-      let updated = (await busy(save, () => api('/api/auth/me', { method: 'PATCH', body: { name } }))).user;
+      let updated = (await busy(save, () => api('/api/auth/me', { method: 'PATCH', body: { name, referenceId } }))).user;
       if (blob) updated = (await busy(save, () => uploadPhoto(blob))).user;
       onDone(updated);
     } catch { /* busy() showed the error */ }

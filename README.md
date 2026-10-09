@@ -19,7 +19,8 @@ A simple, fast, mobile-first web app (installable on phones) for visits to meet 
   only once and security checks the photo, a copied pass does not help anyone get in twice.
 
 **Security staff** (`/security.html`)
-- Separate sign-up (name, number, face photo). An **admin must approve** them before the scanner opens; access can be removed at any time.
+- Separate sign-up: name, number, a **face photo (a face must be found, or they can't continue)** and their **reference**
+  from the list. **Only that reference** sees the request and can approve it; any admin can remove access later.
 - One screen: **scan** (camera, or type the 6-character code). A valid pass shows the booker's **photo, name and number of
   people**, one-tap buttons for **how many actually came** (e.g. 3 of 5), and a big green **Allow entry** button. A used pass
   shows a red **ALREADY CHECKED IN** alert with when and by whom. Today's list lets them correct the number in one tap.

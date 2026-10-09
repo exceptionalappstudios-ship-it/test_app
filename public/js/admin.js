@@ -328,7 +328,7 @@ async function securityView(ctx) {
     $('#list', ctx.el).innerHTML = list.length ? `<div class="card flush">${list.map((s) => `
       <div class="person" data-id="${s.id}" style="flex-wrap:wrap">
         ${photoTag(s.photo, s.name, 'lg')}
-        <div class="grow"><div class="name">${esc(s.name)}</div><div class="meta">${esc(formatPhone(s.phone))}</div>
+        <div class="grow"><div class="name">${esc(s.name)}</div><div class="meta">${esc(formatPhone(s.phone))}${s.reference ? ` · Ref: ${esc(s.reference)}` : ''}</div>
           <div class="meta">${s.status === 'active' ? `Let in ${plural(s.checkinsToday, 'group')} today` : `Registered ${esc(formatWhen(s.createdAt))}`}${s.reviewedBy ? ` · by ${esc(s.reviewedBy)}` : ''}</div></div>
         <div class="contact">${contactButtons(s.phone)}</div>
         <div class="actions" style="width:100%;margin-top:6px">

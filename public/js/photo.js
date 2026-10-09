@@ -87,7 +87,8 @@ export async function processPhoto(file) {
 }
 
 // Renders the photo picker into `el`. Calls onChange(blob) once a photo is ready.
-export function photoPicker(el, { current, onChange, prompt = 'Add a clear photo of your face. Security will use it to recognise you at the entrance.' }) {
+// With `requireFace`, a photo is accepted only when a face is found in it.
+export function photoPicker(el, { current, onChange, requireFace = false, prompt = 'Add a clear photo of your face. Security will use it to recognise you at the entrance.' }) {
   preloadFaceDetector();
   el.innerHTML = `
     <div class="photo-pick">
@@ -113,9 +114,15 @@ export function photoPicker(el, { current, onChange, prompt = 'Add a clear photo
       if (result.faceFound) {
         status.innerHTML = `<div class="notice ok">${icons.checkCircle}<span>${result.faces > 1 ? 'We used the biggest face in the photo. ' : ''}Face found. This photo looks good.</span></div>`;
         onChange(result.blob);
+      } else if (!result.checked && requireFace) {
+        status.innerHTML = `<div class="notice warn">${icons.alert}<span>We could not check the photo for a face. Please check your internet connection and take the photo again.</span></div>`;
+        onChange(null);
       } else if (!result.checked) {
         status.innerHTML = '';
         onChange(result.blob);
+      } else if (requireFace) {
+        status.innerHTML = `<div class="notice bad">${icons.alert}<span>No face found. Please take a clear photo of your face, looking at the camera, in good light. You can continue only when your face is found.</span></div>`;
+        onChange(null);
       } else {
         status.innerHTML = `<div class="notice warn">${icons.alert}<span>We could not find a face. Please take a clear photo of your face, looking at the camera, in good light.</span></div>
           <button type="button" class="btn ghost small" data-anyway>Use this photo anyway</button>`;

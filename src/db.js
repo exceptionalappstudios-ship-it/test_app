@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 PRAGMA foreign_keys = ON;
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
   status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'pending', 'revoked', 'rejected')),
   reviewed_by INTEGER REFERENCES users(id),
   reviewed_at TEXT,
+  reference_id TEXT,                     -- security staff: the reference who approves them
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS users_role ON users (role, status);
@@ -175,6 +176,9 @@ const MIGRATIONS = [
   ['pass_token', 'TEXT'],
   ['checked_in_count', 'INTEGER'],
 ];
+const USER_MIGRATIONS = [
+  ['reference_id', 'TEXT'],
+];
 
 export function openDatabase(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -184,6 +188,8 @@ export function openDatabase(file) {
   db.exec(SCHEMA);
   const columns = new Set(db.prepare('PRAGMA table_info(appointments)').all().map((c) => c.name));
   for (const [name, type] of MIGRATIONS) if (!columns.has(name)) db.exec(`ALTER TABLE appointments ADD COLUMN ${name} ${type}`);
+  const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
+  for (const [name, type] of USER_MIGRATIONS) if (!userColumns.has(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS appointments_pass_token ON appointments (pass_token)');
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return db;

@@ -2,7 +2,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDatabase } from '../src/db.js';
 import { createApp } from '../src/app.js';
-import { hashPassword } from '../src/references.js';
+import { hashPassword, REFERENCES } from '../src/references.js';
 
 // Clock starts Thursday 2030-01-10, 09:00 in Kolkata (03:30 UTC).
 let clock;
@@ -25,6 +25,7 @@ beforeEach(async () => {
     db, now: () => clock,
     config: {
       adminPasswordHash: hashPassword('test-pass'),
+      references: [...REFERENCES, { id: 'seva', name: 'Seva Admin', phones: ['9000000001'] }],
       whatsapp: { token: 't', phoneNumberId: '42', otpTemplate: 'login_code', template: 'appointment_update', passTemplate: 'entry_pass', language: 'en' },
       fetch: async (url, opts) => {
         const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : 'multipart';
@@ -70,14 +71,14 @@ async function login(phone, { signupAs, name, photo = true } = {}) {
   const code = otp.body.template.components[0].parameters[0].text;
   const res = await c('/api/auth/otp/verify', { method: 'POST', body: { phone, code, signupAs } });
   assert.equal(res.status, 200, JSON.stringify(res.body));
-  if (name) await c('/api/auth/me', { method: 'PATCH', body: { name } });
+  if (name) await c('/api/auth/me', { method: 'PATCH', body: { name, ...(signupAs === 'security' && { referenceId: 'seva' }) } });
   if (photo) await c('/api/auth/me/photo', { method: 'POST', raw: JPEG });
   return c;
 }
 
-async function admin() {
+async function admin(phone = '9000000001') {
   const c = client();
-  assert.equal((await c('/api/auth/password', { method: 'POST', body: { phone: '9000000001', password: 'test-pass' } })).status, 200);
+  assert.equal((await c('/api/auth/password', { method: 'POST', body: { phone, password: 'test-pass' } })).status, 200);
   return c;
 }
 const visitor = (phone = '9876543210', name = 'Asha Rao') => login(phone, { name });
@@ -135,19 +136,33 @@ test('wrong codes are limited', async () => {
 });
 
 test('security staff sign up, wait for approval, and can be revoked', async () => {
+  const fresh = await login('9822222222', { signupAs: 'security', photo: true });
+  const half = (await fresh('/api/auth/me', { method: 'PATCH', body: { name: 'No Reference' } })).body.user;
+  assert.equal(half.profileComplete, false); // a reference is needed too
+  assert.equal((await fresh('/api/auth/me', { method: 'PATCH', body: { name: 'No Reference', referenceId: 'nobody' } })).status, 400);
   const s = await login('9811111111', { signupAs: 'security', name: 'Ramesh Guard' });
   assert.deepEqual([(await s('/api/auth/me')).body.user.role, (await s('/api/auth/me')).body.user.status], ['security', 'pending']);
+  assert.deepEqual([(await s('/api/auth/me')).body.user.profileComplete, (await s('/api/auth/me')).body.user.referenceId], [true, 'seva']);
   assert.equal((await s('/api/staff/scan', { method: 'POST', body: { code: 'x' } })).status, 403);
   assert.equal((await s('/api/admin/dashboard')).status, 403);
 
+  // Only the reference they chose sees and answers the request.
+  db.prepare("INSERT INTO users (phone, name, role) VALUES ('+911234567890', 'Demo', 'admin')").run();
+  const other = await admin('1234567890');
+  assert.equal((await other('/api/admin/dashboard')).body.summary.securityPending, 0);
+  assert.equal((await other('/api/admin/security')).body.staff.length, 0);
   const a = await admin();
   assert.equal((await a('/api/admin/dashboard')).body.summary.securityPending, 1);
   const list = (await a('/api/admin/security?q=ramesh')).body.staff;
   assert.equal(list.length, 1);
+  assert.equal(list[0].reference, 'Seva Admin');
+  const denied = await other(`/api/admin/security/${list[0].id}/approve`, { method: 'POST' });
+  assert.deepEqual([denied.status, denied.body.error], [403, 'Only Seva Admin can approve this request.']);
   assert.equal((await a('/api/admin/security?q=98111')).body.staff.length, 1);
   await a(`/api/admin/security/${list[0].id}/approve`, { method: 'POST' });
   assert.equal((await s('/api/staff/scan', { method: 'POST', body: { code: 'nope' } })).status, 404);
-  await a(`/api/admin/security/${list[0].id}/revoke`, { method: 'POST' });
+  assert.equal((await other('/api/admin/security')).body.staff.length, 1); // approved staff are visible to every admin
+  await other(`/api/admin/security/${list[0].id}/revoke`, { method: 'POST' });
   assert.equal((await s('/api/staff/scan', { method: 'POST', body: { code: 'nope' } })).status, 403);
   // Logging in again keeps the existing role; signupAs only applies to new numbers.
   const again = await login('9811111111', { signupAs: 'visitor' });
@@ -552,6 +567,7 @@ test('a database from the previous version is upgraded in place', async () => {
   old.close();
   const upgraded = openDatabase(file);
   assert.equal(upgraded.prepare('SELECT reference, express, ref_phone FROM appointments').get().reference, 'Kept');
-  assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version, 5);
+  assert.ok(upgraded.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'reference_id'));
   assert.ok(fs.existsSync(file));
 });

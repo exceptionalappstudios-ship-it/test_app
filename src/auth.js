@@ -35,12 +35,15 @@ export function checkOtp(db, phone, code) {
   db.prepare('DELETE FROM otp_codes WHERE phone = ?').run(phone);
 }
 
-// Visitors and security need a face photo; admins only a name.
-export const isProfileComplete = (u) => Boolean(u?.name && (u.photo || u.role === 'admin'));
+// Visitors and security need a face photo; admins only a name. Security staff
+// waiting for approval also need to have chosen their reference.
+export const isProfileComplete = (u) => Boolean(u?.name && (u.photo || u.role === 'admin')
+  && (u.role !== 'security' || u.status !== 'pending' || u.reference_id));
 
 export const publicUser = (u) => u && {
   id: u.id, name: u.name, phone: u.phone, role: u.role, status: u.status,
   photo: u.photo ? `/api/photos/${u.photo}` : null, profileComplete: isProfileComplete(u),
+  ...(u.role === 'security' ? { referenceId: u.reference_id ?? null } : {}),
 };
 
 function readCookie(req, name) {

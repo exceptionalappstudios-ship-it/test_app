@@ -5,6 +5,7 @@ import { startScanner } from './scanner.js';
 
 const outlet = $('#app');
 let user = null;
+let config = null;
 let stopStream = null;
 
 function header(title, subtitle = '') {
@@ -50,8 +51,13 @@ function loginView(ctx) {
 }
 
 function setupView(ctx) {
-  header('Register as security', 'Your name and photo are shown to the admin for approval.');
-  renderProfileSetup(ctx.el, user, { intro: 'Add your name and a clear photo of your face. An admin will approve your access.', onDone: (u) => { setUser(u); location.hash = '#/scan'; } });
+  header('Register as security', 'Your reference will see your name and photo and approve you.');
+  renderProfileSetup(ctx.el, user, {
+    intro: 'Add your name, choose your reference and take a clear photo of your face. Your reference will approve your access.',
+    references: user.status === 'pending' ? config.references : null,
+    requireFace: user.status === 'pending',
+    onDone: (u) => { setUser(u); location.hash = '#/scan'; },
+  });
 }
 
 async function scanView(ctx) {
@@ -62,7 +68,8 @@ async function scanView(ctx) {
       ${photoTag(user.photo, user.name, 'xl')}
       <h2 style="margin-top:12px">${esc(user.name)}</h2>
       <div class="big-icon ${waiting ? 'wait' : 'bad'}" style="margin-top:14px">${waiting ? icons.clock : icons.xCircle}</div>
-      <p class="sub">${waiting ? 'An admin needs to approve your account before you can scan passes. This page will open the scanner as soon as you are approved.' : 'Your scanner access has been removed. Please speak to the admin.'}</p>
+      <p class="sub">${waiting ? `Your request has been sent to <strong>${esc(config.references.find((r) => r.id === user.referenceId)?.name ?? 'your reference')}</strong>. This page will open the scanner as soon as you are approved.` : 'Your scanner access has been removed. Please speak to the admin.'}</p>
+      ${waiting ? `<a class="btn ghost small" href="#/setup">${icons.edit} Change details or reference</a>` : ''}
     </div>`;
     return;
   }
@@ -118,6 +125,6 @@ const router = createRouter({
   },
 });
 
-({ user } = await api('/api/auth/me'));
+[config, { user }] = await Promise.all([api('/api/config'), api('/api/auth/me')]);
 if (user?.role === 'visitor') { header('Security staff'); wrongAccount(outlet, user, 'security staff'); }
 else { setUser(user); router.run(); }
