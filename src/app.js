@@ -1,4 +1,5 @@
 import express from 'express';
+import { REFERENCES } from './references.js';
 import compression from 'compression';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +25,7 @@ export const DEFAULT_CONFIG = {
   appUrl: 'http://localhost:3000',
   secureCookies: false,
   defaultCountryCode: '91',
-  sessionTimes: '08:00-13:00,13:00-16:00,16:00-20:00',
+  sessionTimes: '08:00-13:00,16:00-20:00',
   reminderTime: '18:00',     // day-before reminder
   greetingTime: '07:00',     // greeting on the visit day
   vapidSubject: 'mailto:admin@example.com',
@@ -34,6 +35,8 @@ export const DEFAULT_CONFIG = {
   showOtpForTesting: false,
   logOutbound: false,
   trustProxy: 'loopback',
+  references: REFERENCES,
+  adminPasswordHash: null,   // null turns off password login (tests set their own)
 };
 
 // Rejects state-changing requests coming from other websites.
@@ -82,11 +85,11 @@ export function createApp({ db, config: overrides = {}, now = () => new Date() }
       'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:" });
     const a = /^[\w-]{16,40}$/.test(req.params.token) ? byToken.get(req.params.token) : null;
     if (!a) return res.status(404).send(renderPassPage({ state: 'missing' }));
-    const pass = passState(a, { timeZone: config.timeZone, periods: config.periods, now: now() });
+    const pass = passState(a, { timeZone: config.timeZone, now: now() });
     res.send(renderPassPage({
       state: pass.state, name: a.name, visit: formatVisit(a), people: a.people_count, code: a.checkin_code, express: Boolean(a.express),
       qrSvg: pass.state === 'ready' ? await QRCode.toString(a.checkin_code, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) : '',
-      opensText: pass.state === 'not_yet' ? `${formatDay(a.date)}, ${pass.opensAt}` : '',
+      validText: pass.today ? 'Valid today' : `Valid on ${formatDay(a.date)}`,
       checkedInTime: a.checked_in_at ? new Date(a.checked_in_at.replace(' ', 'T') + 'Z').toLocaleTimeString('en-IN', { timeZone: config.timeZone, hour: 'numeric', minute: '2-digit' }) : '',
     }));
   });

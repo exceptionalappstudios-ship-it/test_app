@@ -2,7 +2,8 @@ import express from 'express';
 import QRCode from 'qrcode';
 import { transaction, getSetting } from '../db.js';
 import { requireUser, requireProfile } from '../auth.js';
-import { HttpError, text, phone as parsePhone, normalizePhone } from '../http.js';
+import { HttpError, text, phone as parsePhone, normalizePhone, rateLimiter } from '../http.js';
+import { findReference, referenceHasPhone } from '../references.js';
 import {
   ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, appointmentView, viewsWithPeople, passState,
 } from '../appointments.js';
@@ -12,7 +13,7 @@ export function visitorRoutes({ db, notifier, config, now }) {
   const router = express.Router();
   const { timeZone, periods } = config;
   const today = () => nowInTimezone(timeZone, now()).date;
-  const passOpts = () => ({ timeZone, periods, now: now() });
+  const passOpts = () => ({ timeZone, now: now() });
   // A session can be booked until it ends.
   const stillOpen = (s) => s.date > today() || minutesUntil(s.date, periods[s.period].end, timeZone, now()) > 0;
 
@@ -24,6 +25,8 @@ export function visitorRoutes({ db, notifier, config, now }) {
       purposes: PURPOSES,
       maxPeople: MAX_PEOPLE,
       contact: config.contact,
+      // Names only; the numbers are what the visitor must know.
+      references: config.references.map((r) => ({ id: r.id, name: r.name })),
     });
   });
 
@@ -32,7 +35,7 @@ export function visitorRoutes({ db, notifier, config, now }) {
     FROM visit_sessions s WHERE s.date BETWEEN ? AND ? ORDER BY s.date
   `);
 
-  // Dates with their morning / afternoon / evening sessions. No times are shown
+  // Dates with their morning / evening sessions. No times are shown
   // to visitors, only whether a session still has room.
   const bookingsClosed = () => (getSetting(db, 'bookings_open') === '0'
     ? { closed: true, closedMessage: getSetting(db, 'bookings_closed_message') || 'New bookings are closed right now. Please check again later.' } : null);
@@ -45,7 +48,7 @@ export function visitorRoutes({ db, notifier, config, now }) {
     const to = addDays(from, 60);
     const byDate = new Map();
     for (const s of sessionLoad.all(from, to)) {
-      if (s.is_closed || !stillOpen(s)) continue;
+      if (s.is_closed || !PERIODS.includes(s.period) || !stillOpen(s)) continue;
       if (!byDate.has(s.date)) byDate.set(s.date, []);
       byDate.get(s.date).push({ id: s.id, period: s.period, label: periods[s.period].label, remaining: Math.max(0, s.remaining) });
     }
@@ -94,6 +97,27 @@ export function visitorRoutes({ db, notifier, config, now }) {
     return { passPhone, count, people };
   }
 
+  // The visitor picks their reference from the list and types that person's
+  // phone number; it must match. Wrong numbers are limited so the list can't
+  // be guessed.
+  const wrongReference = rateLimiter({ max: 10, windowMs: 60 * 60_000, message: 'Too many wrong reference numbers. Please check the number with your reference and try again in an hour.' });
+  function checkReference(req) {
+    const ref = findReference(config.references, req.body?.referenceId);
+    if (!ref) throw new HttpError(400, 'Please choose who referred you from the list');
+    const refPhone = parsePhone(req.body?.refPhone, config.defaultCountryCode, `${ref.name}'s phone number`);
+    wrongReference.check(req.user.id);
+    if (!referenceHasPhone(ref, refPhone)) {
+      wrongReference(req.user.id);
+      throw new HttpError(400, `This number does not match ${ref.name}. Please check the number with your reference. You can book only with the right number.`);
+    }
+    return { reference: ref.name, refPhone };
+  }
+
+  router.post('/reference/check', requireProfile, (req, res) => {
+    checkReference(req);
+    res.json({ ok: true });
+  });
+
   // Lets the form warn about conflicts as soon as numbers are entered.
   router.post('/appointments/check', requireProfile, (req, res) => {
     const phones = [...new Set((req.body?.phones ?? []).map((p) => normalizePhone(p, config.defaultCountryCode)).filter(Boolean))];
@@ -103,9 +127,8 @@ export function visitorRoutes({ db, notifier, config, now }) {
   router.post('/appointments', requireProfile, (req, res) => {
     const body = req.body ?? {};
     const user = req.user;
-    const reference = text(body.reference, 'the name of the person who referred you', 120);
-    const refPhone = parsePhone(body.refPhone, config.defaultCountryCode, "your reference's phone number");
-    const refDesignation = text(body.refDesignation, "your reference's designation (for example: Teacher, Centre coordinator)", 80);
+    const { reference, refPhone } = checkReference(req);
+    const refDesignation = null;
     const purposes = [...new Set(Array.isArray(body.purposes) ? body.purposes : [])].filter((p) => p in PURPOSES);
     if (!purposes.length) throw new HttpError(400, 'Please choose the purpose of your meeting');
     const description = text(body.description, 'a few words about your visit', 500, { required: purposes.includes('other') });
@@ -178,7 +201,7 @@ export function visitorRoutes({ db, notifier, config, now }) {
     res.json({ appointment: viewsWithPeople(db, [getAppointment(db, appt.id)])[0] });
   });
 
-  // The QR code is only sent once the pass is valid (visit day, session start).
+  // The QR code shows as soon as the visit is confirmed.
   router.get('/me/appointments/:id/pass', requireUser, async (req, res) => {
     const appt = own(req);
     const pass = passState(appt, passOpts());

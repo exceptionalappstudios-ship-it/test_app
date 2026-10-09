@@ -96,7 +96,7 @@ const normal = (p) => `+91${tenDigits(p)}`;
 const maxPeople = () => Math.max(1, Math.min(config.maxPeople, draft?.session?.remaining ?? config.maxPeople));
 const problemBox = (msg) => (msg ? `<div class="notice bad" style="margin-bottom:14px">${icons.alert}<span>${esc(msg)}</span></div>` : '');
 
-// Step 1: day and morning / afternoon / evening.
+// Step 1: day and morning / evening.
 async function bookWhenView(ctx) {
   stepHeader('when');
   const [avail, me] = await Promise.all([api('/api/availability'), api('/api/me')]);
@@ -118,7 +118,7 @@ async function bookWhenView(ctx) {
     return;
   }
   bookingDays = days;
-  draft ??= { date: days[0]?.date ?? null, session: null, phone: user.phone, reference: '', refPhone: '', refDesignation: '', count: 1, purposes: [], description: '', people: [], conflicts: {} };
+  draft ??= { date: days[0]?.date ?? null, session: null, phone: user.phone, referenceId: '', refPhone: '', refOk: false, count: 1, purposes: [], description: '', people: [], conflicts: {} };
   if (!days.length) {
     ctx.el.innerHTML = `<div class="card center"><div class="big-icon wait">${icons.calendar}</div><h2>No dates open right now</h2><p class="sub">New dates are added regularly. Please check again soon.</p></div>`;
     return;
@@ -135,7 +135,7 @@ async function bookWhenView(ctx) {
         </div>
         <h3 style="margin-top:8px">${esc(formatDate(draft.date))}</h3>
         <div class="choices">
-          ${['morning', 'afternoon', 'evening'].map((p) => {
+          ${Object.keys(config.periods).map((p) => {
             const x = byPeriod[p];
             const full = !x || x.remaining < 1;
             return `<button type="button" class="choice ${x && draft.session?.id === x.id ? 'on' : ''}" data-session="${x?.id ?? ''}" ${full ? 'disabled' : ''}>
@@ -184,13 +184,15 @@ function bookDetailsView(ctx, problem = '') {
     </div>
     <form class="card" novalidate>
       <h3 style="margin-bottom:2px">Who referred you?</h3>
-      <p class="small muted" style="margin:0">The ashram may call them to confirm.</p>
-      <label for="reference">Their name <span class="muted small">(required)</span></label>
-      <input id="reference" maxlength="120" value="${esc(draft.reference)}" placeholder="Full name">
+      <p class="small muted" style="margin:0">Choose your reference and enter their phone number. You can book only if the number is right.</p>
+      <label for="referenceId">Reference <span class="muted small">(required)</span></label>
+      <select id="referenceId">
+        <option value="">Choose your reference</option>
+        ${config.references.map((r) => `<option value="${esc(r.id)}" ${r.id === draft.referenceId ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}
+      </select>
       <label for="refPhone">Their phone number <span class="muted small">(required)</span></label>
       ${phoneField('refPhone', draft.refPhone)}
-      <label for="refDesignation">Their designation <span class="muted small">(required)</span></label>
-      <input id="refDesignation" maxlength="80" value="${esc(draft.refDesignation)}" placeholder="For example: Teacher, Centre coordinator">
+      <div class="hint">The phone number of the person you chose.</div>
     </form>
     <form class="card" novalidate>
       <div class="label" style="margin-top:0">How many people are coming, including you?</div>
@@ -214,9 +216,11 @@ function bookDetailsView(ctx, problem = '') {
     <div class="actions" style="margin-top:0"><button class="btn light" data-back>${icons.back} Back</button><button class="btn" data-next>Continue ${icons.next}</button></div>`;
 
   const keep = () => {
-    draft.reference = $('#reference', ctx.el).value.trim();
-    draft.refPhone = $('#refPhone', ctx.el).value.trim();
-    draft.refDesignation = $('#refDesignation', ctx.el).value.trim();
+    const referenceId = $('#referenceId', ctx.el).value;
+    const refPhone = $('#refPhone', ctx.el).value.trim();
+    if (referenceId !== draft.referenceId || tenDigits(refPhone) !== tenDigits(draft.refPhone)) draft.refOk = false;
+    draft.referenceId = referenceId;
+    draft.refPhone = refPhone;
     draft.description = $('#description', ctx.el).value;
     const wa = $('#wa', ctx.el);
     if (wa) draft.phone = wa.value.trim();
@@ -239,15 +243,23 @@ function bookDetailsView(ctx, problem = '') {
     again();
   }));
   $('[data-back]', ctx.el).addEventListener('click', () => { keep(); goBack('#/book'); });
-  $('[data-next]', ctx.el).addEventListener('click', () => {
+  $('[data-next]', ctx.el).addEventListener('click', async (e) => {
     keep();
     const msg = !isTenDigits(tenDigits(draft.phone)) ? 'Please enter the 10-digit WhatsApp number for your pass.'
-      : draft.reference.length < 2 ? 'Please enter the name of the person who referred you.'
+      : !draft.referenceId ? 'Please choose who referred you.'
       : !isTenDigits(draft.refPhone) ? "Please enter your reference's 10-digit phone number."
-      : draft.refDesignation.length < 2 ? "Please enter your reference's designation."
       : !draft.purposes.length ? 'Please choose the purpose of your meeting.'
       : draft.purposes.includes('other') && !draft.description.trim() ? 'Please tell us in a few words about your visit.' : '';
     if (msg) return again(msg);
+    // The reference's number must match before going on.
+    if (!draft.refOk) {
+      try {
+        await busy(e.currentTarget, () => api('/api/reference/check', { method: 'POST', body: { referenceId: draft.referenceId, refPhone: tenDigits(draft.refPhone) } }));
+        draft.refOk = true;
+      } catch (err) {
+        return again(err.message);
+      }
+    }
     go(draft.count > 1 ? 'people' : 'review');
   });
 }
@@ -346,19 +358,19 @@ function bookReviewView(ctx, problem = '') {
         <dt>Day</dt><dd><strong>${esc(formatDate(draft.date))}</strong></dd>
         <dt>Time</dt><dd><strong>${esc(draft.session.label)}</strong></dd>
         <dt>People</dt><dd>${esc(plural(draft.count, 'person', 'people'))}${draft.people.length ? `<br>${draft.people.map((p) => esc(p.name)).join(', ')}` : ''}</dd>
-        <dt>Reference</dt><dd>${esc(draft.reference)}<br><span class="muted">${esc(draft.refDesignation)} · ${esc(formatPhone(normal(draft.refPhone)))}</span></dd>
+        <dt>Reference</dt><dd>${esc(config.references.find((r) => r.id === draft.referenceId)?.name ?? '')}</dd>
         <dt>Purpose</dt><dd>${draft.purposes.map((p) => esc(config.purposes[p])).join(', ')}</dd>
         ${draft.description.trim() ? `<dt>Details</dt><dd>${esc(draft.description)}</dd>` : ''}
       </dl>
     </div>
-    <div class="notice info" style="margin-bottom:14px">${icons.info}<span>After the ashram confirms, you will get a message on WhatsApp. Your QR pass will be sent on the day of your visit.</span></div>
+    <div class="notice info" style="margin-bottom:14px">${icons.info}<span>After the ashram confirms, you will get a message on WhatsApp. With the confirmation you get your QR entry pass. Show it any time on the day of your visit.</span></div>
     ${problemBox(problem)}
     <div class="actions" style="margin-top:0"><button class="btn light" data-back>${icons.back} Back</button><button class="btn" data-send>${icons.send} Send request</button></div>`;
   $('[data-back]', ctx.el).addEventListener('click', () => goBack(draft.count > 1 ? '#/book/people' : '#/book/details'));
   $('[data-send]', ctx.el).addEventListener('click', async (e) => {
     try {
       const { appointment } = await busy(e.currentTarget, () => api('/api/appointments', { method: 'POST', body: {
-        sessionId: draft.session.id, phone: normal(draft.phone), reference: draft.reference, refPhone: normal(draft.refPhone), refDesignation: draft.refDesignation,
+        sessionId: draft.session.id, phone: normal(draft.phone), referenceId: draft.referenceId, refPhone: tenDigits(draft.refPhone),
         peopleCount: draft.count, people: draft.people.map((p) => ({ name: p.name, phone: normal(p.phone) })), purposes: draft.purposes, description: draft.description,
       } }));
       draft = null;
@@ -383,7 +395,7 @@ function bookDoneView(ctx) {
     <div class="big-icon ok">${icons.checkCircle}</div>
     <h2>Thank you, ${esc(user.name.split(' ')[0])}</h2>
     <p class="sub">Your request for <strong>${esc(formatDate(a.date))}, ${esc(a.periodLabel)}</strong> for ${esc(plural(a.peopleCount, 'person', 'people'))} has been sent.<br><br>
-    We will send the confirmation on WhatsApp. On the day of your visit, your QR entry pass will be sent on WhatsApp and will also show in this app.</p>
+    Once the ashram confirms, your QR entry pass will be sent on WhatsApp and will also show in this app.</p>
     <a class="btn block" href="#/visit">${icons.ticket} See my visit</a></div>`;
 }
 
@@ -418,13 +430,13 @@ async function visitView(ctx) {
         const { pass } = await api(`/api/me/appointments/${current.id}/pass`);
         if (!ctx.isCurrent()) return;
         passHtml = pass.state === 'ready' ? `<div class="pass">
-          <div class="notice ok" style="justify-content:center">${icons.checkCircle}<span>Show this QR code at the entrance</span></div>
+          <div class="notice ok" style="justify-content:center">${icons.checkCircle}<span>${pass.today ? 'Show this QR code at the entrance' : `Confirmed. Show this on ${esc(formatShortDate(pass.validOn))}`}</span></div>
           <div class="qr">${pass.svg}</div>
           <div class="small muted" style="letter-spacing:.08em;font-weight:700">ENTRY CODE</div>
           <div class="entry-code">${esc(pass.code)}</div>
           <div class="who">${esc(current.name)}</div>
           <div class="muted">${esc(plural(current.peopleCount, 'person', 'people'))} · ${esc(current.periodLabel)}</div>
-          <p class="small muted">Valid only today. It can be scanned only once.</p></div>` : '';
+          <p class="small muted">${pass.today ? 'Valid any time today.' : `Valid any time on ${esc(formatDate(pass.validOn))}.`} It can be scanned only once.</p></div>` : '';
       } else if (p.state === 'not_yet') {
         passHtml = `<div class="pass"><div class="big-icon wait">${icons.clock}</div>
           <h2>Confirmed ✅</h2><p class="sub">Your QR entry pass will be sent on WhatsApp on <strong>${esc(formatShortDate(p.opensOn))} at ${esc(p.opensAt)}</strong>. It will also show here.</p></div>`;

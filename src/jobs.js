@@ -1,12 +1,13 @@
-import { nowInTimezone, minutesUntil, addDays, formatVisit, formatClock, formatDay, PERIOD_LABELS } from './time.js';
+import { nowInTimezone, addDays, formatVisit, formatDay, PERIOD_LABELS } from './time.js';
 import { ensurePass, passMessage } from './appointments.js';
 
 // Scheduled WhatsApp + in-app messages for confirmed visits:
-//   - the day before (at REMINDER_TIME): "your visit is tomorrow, your QR pass comes tomorrow"
+//   - the day before (at REMINDER_TIME): "your visit is tomorrow"
 //   - on the day (at GREETING_TIME): a greeting
-//   - when the session opens: the QR entry pass
+// The QR entry pass itself goes out with the confirmation; any confirmed visit
+// that somehow has no pass yet gets it on the morning of the visit.
 export function createJobs({ db, notifier, config, now = () => new Date() }) {
-  const { timeZone, periods } = config;
+  const { timeZone } = config;
 
   function run() {
     const clock = nowInTimezone(timeZone, now());
@@ -20,7 +21,7 @@ export function createJobs({ db, notifier, config, now = () => new Date() }) {
       for (const a of rows) {
         mark.run(a.id);
         notifier.notify(a.user_id, a.id, 'Your visit is tomorrow 🙏',
-          `Reminder: your meeting with Gurudev is tomorrow, ${formatVisit(a)}, for ${a.people_count} ${a.people_count === 1 ? 'person' : 'people'}. Your QR entry pass will be sent on WhatsApp tomorrow at ${formatClock(periods[a.period].start)}.`,
+          `Reminder: your meeting with Gurudev is tomorrow, ${formatVisit(a)}, for ${a.people_count} ${a.people_count === 1 ? 'person' : 'people'}. Please keep your QR entry pass ready (entry code ${a.checkin_code}). You can show it any time tomorrow.`,
           { phone: a.phone });
         sent++;
       }
@@ -31,21 +32,17 @@ export function createJobs({ db, notifier, config, now = () => new Date() }) {
       const mark = db.prepare('UPDATE appointments SET greeted = 1, reminded_day_before = 1 WHERE id = ?');
       for (const a of rows) {
         mark.run(a.id);
-        const opens = periods[a.period].start;
-        const passNote = minutesUntil(today, opens, timeZone, now()) > 0
-          ? `Your QR entry pass will be sent at ${formatClock(opens)}.`
-          : 'Your QR entry pass is being sent now.';
+        const passNote = a.pass_sent_at ? `Show your QR entry pass (entry code ${a.checkin_code}) at the entrance.` : 'Your QR entry pass is being sent now.';
         notifier.notify(a.user_id, a.id, 'Jai Gurudev 🙏 Today is your visit',
           `Good day, ${a.name}! Today is your meeting with Gurudev (${PERIOD_LABELS[a.period]}). ${passNote}`, { phone: a.phone });
         sent++;
       }
     }
 
-    // Passes go out when each session opens.
+    // Passes for confirmed visits that don't have one yet.
     const due = db.prepare(`SELECT * FROM appointments WHERE status = 'approved' AND date = ? AND pass_sent_at IS NULL AND checked_in_at IS NULL`).all(today);
     const markPass = db.prepare("UPDATE appointments SET pass_sent_at = datetime('now'), greeted = 1, reminded_day_before = 1 WHERE id = ?");
     for (const row of due) {
-      if (minutesUntil(today, periods[row.period].start, timeZone, now()) > 0) continue;
       const a = ensurePass(db, row);
       markPass.run(a.id);
       notifier.sendPass(a, 'Your entry pass 🎟️', passMessage(a, `today (${formatDay(today)}, ${PERIOD_LABELS[a.period]})`));

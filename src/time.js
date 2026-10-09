@@ -59,16 +59,21 @@ export const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // ---- Visit sessions ----------------------------------------------------------
 
-export const PERIODS = ['morning', 'afternoon', 'evening'];
+export const PERIODS = ['morning', 'evening'];
 export const PERIOD_LABELS = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening' };
+// Visits booked before the afternoon session was dropped still need its times.
+const OLD_AFTERNOON = { start: '13:00', end: '16:00', label: 'Afternoon' };
 
-// "08:00-13:00,13:00-16:00,16:00-20:00" -> { morning: { start, end }, ... }
-export function parsePeriodTimes(spec = '08:00-13:00,13:00-16:00,16:00-20:00') {
+// "08:00-13:00,16:00-20:00" -> { morning: { start, end }, evening: { ... } }
+export function parsePeriodTimes(spec = '08:00-13:00,16:00-20:00') {
   const parts = spec.split(',').map((p) => p.trim().split('-'));
-  if (parts.length !== 3 || parts.some(([s, e]) => !TIME_RE.test(s ?? '') || !TIME_RE.test(e ?? '') || s >= e)) {
-    throw new Error(`SESSION_TIMES must look like 08:00-13:00,13:00-16:00,16:00-20:00 (got "${spec}")`);
+  if (parts.length !== PERIODS.length || parts.some(([s, e]) => !TIME_RE.test(s ?? '') || !TIME_RE.test(e ?? '') || s >= e)) {
+    throw new Error(`SESSION_TIMES must look like 08:00-13:00,16:00-20:00 (morning,evening; got "${spec}")`);
   }
-  return Object.fromEntries(PERIODS.map((p, i) => [p, { start: parts[i][0], end: parts[i][1], label: PERIOD_LABELS[p] }]));
+  return {
+    ...Object.fromEntries(PERIODS.map((p, i) => [p, { start: parts[i][0], end: parts[i][1], label: PERIOD_LABELS[p] }])),
+    afternoon: OLD_AFTERNOON,
+  };
 }
 
 // "13:00" -> "1:00 PM"

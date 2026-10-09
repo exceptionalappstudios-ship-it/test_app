@@ -1,6 +1,6 @@
 import { openDatabase } from './db.js';
 import { createApp } from './app.js';
-import { phone as parsePhone } from './http.js';
+import { REFERENCES, ADMIN_PASSWORD_HASH, hashPassword } from './references.js';
 import path from 'node:path';
 
 const env = process.env;
@@ -32,30 +32,32 @@ const config = {
   showOtpForTesting: env.SHOW_OTP_ON_SCREEN === '1',
   logOutbound: true,
   // Behind a hosting proxy, trust one hop so rate limits see each visitor's own IP.
+  references: REFERENCES,
+  adminPasswordHash: env.ADMIN_PASSWORD ? hashPassword(env.ADMIN_PASSWORD) : ADMIN_PASSWORD_HASH,
   trustProxy: env.TRUST_PROXY ? (/^\d+$/.test(env.TRUST_PROXY) ? Number(env.TRUST_PROXY) : env.TRUST_PROXY) : (onRailway ? 1 : 'loopback'),
 };
 if (config.sessionTimes === undefined) delete config.sessionTimes;
 
 const db = openDatabase(env.DATABASE_FILE || path.join(dataDir, 'appointments.db'));
 
-// Admins are set by phone number; they log in with a WhatsApp code.
-// ADMIN_PHONE on the host can add more (numbers separated by commas).
-const ADMIN_PHONES = '9601345289,9913269623';
-for (const raw of `${ADMIN_PHONES},${env.ADMIN_PHONE || ''}`.split(',').map((p) => p.trim()).filter(Boolean)) {
-  let phone;
-  try { phone = parsePhone(raw, config.defaultCountryCode); } catch { console.warn(`Skipping admin number "${raw}": not 10 digits`); continue; }
-  const existing = db.prepare('SELECT * FROM users WHERE phone = ?').get(phone);
-  if (!existing) {
-    db.prepare("INSERT INTO users (phone, name, role, status) VALUES (?, NULL, 'admin', 'active')").run(phone);
-    console.log(`Admin account ready for ${phone}. Log in with this number at ${appUrl}/admin.html`);
-  } else if (existing.role !== 'admin' || existing.status !== 'active') {
-    db.prepare("UPDATE users SET role = 'admin', status = 'active' WHERE id = ?").run(existing.id);
-    console.log(`Gave admin access to ${phone}`);
+// The admins are exactly the people on the reference list (src/references.js).
+// They log in with their number and the admin password.
+const adminPhones = [];
+for (const ref of REFERENCES) {
+  for (const ten of ref.phones) {
+    const phone = `+${config.defaultCountryCode}${ten}`;
+    adminPhones.push(phone);
+    const existing = db.prepare('SELECT * FROM users WHERE phone = ?').get(phone);
+    if (!existing) {
+      db.prepare("INSERT INTO users (phone, name, role, status) VALUES (?, ?, 'admin', 'active')").run(phone, ref.name);
+    } else if (existing.role !== 'admin' || existing.status !== 'active' || !existing.name) {
+      db.prepare("UPDATE users SET role = 'admin', status = 'active', name = COALESCE(name, ?) WHERE id = ?").run(ref.name, existing.id);
+    }
   }
 }
-if (!db.prepare("SELECT 1 FROM users WHERE role = 'admin'").get()) {
-  console.warn('No admin yet. Set ADMIN_PHONE to your WhatsApp number and restart.');
-}
+const removed = db.prepare(`UPDATE users SET role = 'visitor' WHERE role = 'admin' AND phone NOT IN (${adminPhones.map(() => '?').join(',')}) RETURNING id`).all(...adminPhones);
+for (const { id } of removed) db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
+console.log(`${adminPhones.length} admins ready. They log in at ${appUrl}/admin.html with their number and the admin password.`);
 if (!config.whatsapp) {
   console.warn('WhatsApp is not set up yet (WHATSAPP_TOKEN). Messages and login codes will be printed here instead.');
 }

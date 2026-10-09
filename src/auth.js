@@ -35,7 +35,8 @@ export function checkOtp(db, phone, code) {
   db.prepare('DELETE FROM otp_codes WHERE phone = ?').run(phone);
 }
 
-export const isProfileComplete = (u) => Boolean(u?.name && u?.photo);
+// Visitors and security need a face photo; admins only a name.
+export const isProfileComplete = (u) => Boolean(u?.name && (u.photo || u.role === 'admin'));
 
 export const publicUser = (u) => u && {
   id: u.id, name: u.name, phone: u.phone, role: u.role, status: u.status,

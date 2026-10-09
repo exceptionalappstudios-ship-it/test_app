@@ -3,7 +3,7 @@ import {
   contactButtons, toast, openSheet, confirmSheet, busy, throttle, createRouter, goBack, liveStream, homeFor, wrongAccount, PERIOD_ICONS, phoneField, isTenDigits,
 } from './common.js';
 import { icons } from './icons.js';
-import { renderLogin, renderProfileSetup } from './login.js';
+import { renderProfileSetup } from './login.js';
 import { photoPicker } from './photo.js';
 import { renderChart, legendHtml } from './chart.js';
 
@@ -368,7 +368,7 @@ function moreView(ctx) {
       ${link('#/sessions', icons.calendar, 'Bookings & slots', 'Open or close bookings, open days, set slots')}
       ${link('#/express', icons.ticket, 'Express pass', 'Let someone in today with just a name and number')}
       ${link('/security.html#/scan', icons.scan, 'Scan passes', 'Open the scanner')}
-      ${link('#/admins', icons.key, 'Admins', 'Add or remove admins')}
+      ${link('#/admins', icons.key, 'Admins', 'Who can open the admin app')}
       ${link('#/outbox', icons.message, 'WhatsApp delivery', 'See sent and failed messages')}
     </div>
     <button class="btn danger block" data-logout>${icons.logout} Log out</button>`;
@@ -512,33 +512,12 @@ async function sessionsView(ctx) {
 }
 
 async function adminsView(ctx) {
-  header('Admins', 'Admins log in with their WhatsApp number.');
-  const load = async () => {
-    const { admins } = await api('/api/admin/admins');
-    if (!ctx.isCurrent()) return;
-    ctx.el.innerHTML = `
-      <form class="card" id="add">
-        <h2>Add an admin</h2>
-        <label for="an">Name</label><input id="an" name="name" maxlength="80">
-        <label for="ap">WhatsApp number (10 digits)</label>${phoneField('ap')}
-        <div class="actions"><button class="btn block" type="submit">${icons.plus} Add admin</button></div>
-      </form>
-      <div class="card flush">${admins.map((a) => `<div class="person">${photoTag(a.photo, a.name)}<div class="grow"><div class="name">${esc(a.name ?? 'Not logged in yet')}${a.id === user.id ? ' (you)' : ''}</div><div class="meta">${esc(formatPhone(a.phone))}</div></div>
-        ${a.id === user.id ? '' : `<button class="btn small danger" data-remove="${a.id}">Remove</button>`}</div>`).join('')}</div>`;
-    $('#add', ctx.el).addEventListener('submit', async (e) => {
-      e.preventDefault();
-      if (!isTenDigits($('#ap', ctx.el).value)) { toast('Please enter a 10-digit WhatsApp number.'); return; }
-      await busy($('button', e.target), () => api('/api/admin/admins', { method: 'POST', body: { name: e.target.name.value, phone: $('#ap', ctx.el).value } }));
-      toast('Admin added. They can now log in with their WhatsApp number.');
-      load();
-    });
-    ctx.el.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
-      if (!await confirmSheet({ title: 'Remove this admin?', confirm: 'Remove', danger: true })) return;
-      await busy(b, () => api(`/api/admin/admins/${b.dataset.remove}`, { method: 'DELETE' }));
-      load();
-    }));
-  };
-  await load();
+  header('Admins', 'The references are the admins. They log in with their number and the admin password.');
+  const { admins } = await api('/api/admin/admins');
+  if (!ctx.isCurrent()) return;
+  ctx.el.innerHTML = `
+    <div class="notice info" style="margin-bottom:14px">${icons.info}<span>This list is fixed. To add or remove an admin, ask the app developer to change the reference list.</span></div>
+    <div class="card flush">${admins.map((a) => `<div class="person">${photoTag(a.photo, a.name)}<div class="grow"><div class="name">${esc(a.name ?? '')}${a.id === user.id ? ' (you)' : ''}</div><div class="meta">${esc(formatPhone(a.phone))}</div></div></div>`).join('')}</div>`;
 }
 
 async function outboxView(ctx) {
@@ -560,20 +539,23 @@ async function expressView(ctx) {
   let photo = null;
   let count = 1;
   const purposes = new Set();
+  // The admin is usually the reference themselves.
+  const mine = config.references.find((r) => r.name === user.name)?.id ?? '';
   ctx.el.innerHTML = `
     <form class="card" novalidate>
-      <label for="xn" style="margin-top:0">Name <span class="muted small">(required)</span></label>
+      <label for="xr" style="margin-top:0">Reference</label>
+      <select id="xr">
+        <option value="">No reference</option>
+        ${config.references.map((r) => `<option value="${esc(r.id)}" ${r.id === mine ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}
+      </select>
+      <label for="xn">Name <span class="muted small">(required)</span></label>
       <input id="xn" maxlength="80" autocomplete="off" placeholder="Full name">
       <label for="xp">WhatsApp number <span class="muted small">(required)</span></label>
       ${phoneField('xp')}
-      <div class="label">How many people?</div>
-      <div class="stepper"><button type="button" data-dec aria-label="Fewer">${icons.minus}</button><span class="n" data-num>1</span><button type="button" data-inc aria-label="More">${icons.plus}</button><span class="muted small">Up to ${config.maxPeople}</span></div>
-      <h3 style="margin:22px 0 0">Reference <span class="muted small" style="font-weight:500">(optional)</span></h3>
-      <label for="xr">Name</label><input id="xr" maxlength="120" placeholder="Who referred them">
-      <label for="xrp">Phone number (10 digits)</label>${phoneField('xrp')}
-      <label for="xrd">Designation</label><input id="xrd" maxlength="80" placeholder="For example: Teacher, Centre coordinator">
       <details style="margin-top:18px">
-        <summary style="font-weight:700;cursor:pointer;padding:6px 0">Photo, purpose and note <span class="muted small">(optional)</span></summary>
+        <summary style="font-weight:700;cursor:pointer;padding:6px 0">More details <span class="muted small">(optional)</span></summary>
+        <div class="label">How many people?</div>
+        <div class="stepper"><button type="button" data-dec aria-label="Fewer">${icons.minus}</button><span class="n" data-num>1</span><button type="button" data-inc aria-label="More">${icons.plus}</button><span class="muted small">Up to ${config.maxPeople}</span></div>
         <div class="label">Photo</div>
         <div data-photo></div>
         <div class="label">Purpose</div>
@@ -597,15 +579,14 @@ async function expressView(ctx) {
     const err = $('[data-error]', ctx.el);
     err.innerHTML = '';
     const problem = !$('#xn', ctx.el).value.trim() ? 'Please enter their name.'
-      : !isTenDigits($('#xp', ctx.el).value) ? 'Please enter their 10-digit WhatsApp number.'
-      : $('#xrp', ctx.el).value && !isTenDigits($('#xrp', ctx.el).value) ? "The reference's phone number must be 10 digits." : '';
+      : !isTenDigits($('#xp', ctx.el).value) ? 'Please enter their 10-digit WhatsApp number.' : '';
     if (problem) { err.innerHTML = `<div class="notice bad" style="margin-top:12px">${icons.alert}<span>${esc(problem)}</span></div>`; return; }
     try {
       let photoName = null;
       if (photo) photoName = (await busy(button, () => api('/api/admin/photos', { method: 'POST', raw: photo }))).photo;
       const { appointment: a } = await busy(button, () => api('/api/admin/express', { method: 'POST', body: {
         name: $('#xn', ctx.el).value, phone: $('#xp', ctx.el).value, peopleCount: count, photo: photoName,
-        reference: $('#xr', ctx.el).value, refPhone: $('#xrp', ctx.el).value, refDesignation: $('#xrd', ctx.el).value,
+        referenceId: $('#xr', ctx.el).value,
         purposes: [...purposes], description: $('#xd', ctx.el).value, force,
       } }));
       const { el } = openSheet(`<div class="center">
@@ -627,13 +608,38 @@ async function expressView(ctx) {
 
 // ---- Boot -----------------------------------------------------------------------------
 
-function loginView(ctx) {
-  header('Admin', 'Log in with your WhatsApp number.');
-  renderLogin(ctx.el, { onDone: (u) => {
-    if (u.role !== 'admin') { header('Admin'); wrongAccount(ctx.el, u, 'admins'); return; }
-    setUser(u);
-    location.hash = u.profileComplete ? '#/home' : '#/setup';
-  } });
+// Admins log in with their phone number and the admin password.
+function loginView(ctx, error = '') {
+  header('Admin', 'Log in with your phone number and password.');
+  ctx.el.innerHTML = `
+    <form class="card narrow" novalidate>
+      <h2>Admin login</h2>
+      <label for="phone">Phone number</label>
+      ${phoneField('phone')}
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" maxlength="100">
+      ${error ? `<div class="notice bad" style="margin-top:12px">${icons.alert}<span>${esc(error)}</span></div>` : ''}
+      <div class="actions"><button class="btn block" type="submit">${icons.key} Log in</button></div>
+    </form>
+    <p class="center small muted" style="margin-top:18px">Visiting Gurudev? <a href="/">Book a visit here</a></p>`;
+  const form = $('form', ctx.el);
+  $('#phone', ctx.el).focus();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const phone = $('#phone', ctx.el).value;
+    const password = $('#password', ctx.el).value;
+    if (!isTenDigits(phone)) return loginView(ctx, 'Please enter your 10-digit phone number.');
+    if (!password) return loginView(ctx, 'Please enter the password.');
+    try {
+      const { user: u } = await busy($('button', form), () => api('/api/auth/password', { method: 'POST', body: { phone, password } }));
+      setUser(u);
+      location.hash = u.profileComplete ? '#/home' : '#/setup';
+    } catch (err) {
+      loginView(ctx, err.message);
+      $('#phone', ctx.el).value = phone;
+      $('#password', ctx.el).focus();
+    }
+  });
 }
 
 function setupView(ctx) {

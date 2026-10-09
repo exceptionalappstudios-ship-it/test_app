@@ -35,7 +35,7 @@ export function phone(value, countryCode, field = 'a valid WhatsApp number') {
 // Fixed-window limiter for OTP endpoints.
 export function rateLimiter({ max, windowMs, message = 'Too many attempts. Please wait a few minutes and try again.' }) {
   const hits = new Map();
-  return (key) => {
+  const limiter = (key) => {
     const now = Date.now();
     const entry = hits.get(key);
     if (!entry || entry.reset < now) {
@@ -45,4 +45,10 @@ export function rateLimiter({ max, windowMs, message = 'Too many attempts. Pleas
     }
     if (++entry.count > max) throw new HttpError(429, message);
   };
+  // Throws if `key` is already over the limit, without counting this try.
+  limiter.check = (key) => {
+    const entry = hits.get(key);
+    if (entry && entry.reset >= Date.now() && entry.count >= max) throw new HttpError(429, message);
+  };
+  return limiter;
 }

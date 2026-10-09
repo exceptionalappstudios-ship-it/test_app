@@ -1,6 +1,7 @@
 import express from 'express';
 import { issueOtp, checkOtp, publicUser, startSession, endSession, requireUser } from '../auth.js';
 import { HttpError, text, phone as parsePhone, rateLimiter } from '../http.js';
+import { checkPassword } from '../references.js';
 
 export function authRoutes({ db, whatsapp, notifier, config, photos }) {
   const router = express.Router();
@@ -37,6 +38,25 @@ export function authRoutes({ db, whatsapp, notifier, config, photos }) {
       user = db.prepare('INSERT INTO users (phone, role, status) VALUES (?, ?, ?) RETURNING *')
         .get(phone, security ? 'security' : 'visitor', security ? 'pending' : 'active');
       if (security) notifier.emitToStaff('security');
+    }
+    startSession(db, res, user, config);
+    res.json({ user: publicUser(user) });
+  });
+
+  // Admins log in with their number and the admin password. Only wrong
+  // tries count towards the limits.
+  const wrongPerIp = rateLimiter({ max: 20, windowMs: 15 * 60_000 });
+  const wrongPerPhone = rateLimiter({ max: 8, windowMs: 15 * 60_000, message: 'Too many wrong tries for this number. Please wait 15 minutes.' });
+  router.post('/password', (req, res) => {
+    const phone = parsePhone(req.body?.phone, config.defaultCountryCode);
+    wrongPerIp.check(req.ip);
+    wrongPerPhone.check(phone);
+    const user = findByPhone.get(phone);
+    const ok = checkPassword(req.body?.password, config.adminPasswordHash);
+    if (!ok || user?.role !== 'admin' || user.status !== 'active') {
+      wrongPerIp(req.ip);
+      wrongPerPhone(phone);
+      throw new HttpError(400, 'Wrong number or password.');
     }
     startSession(db, res, user, config);
     res.json({ user: publicUser(user) });

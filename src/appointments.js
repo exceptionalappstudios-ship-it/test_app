@@ -1,4 +1,4 @@
-import { nowInTimezone, minutesUntil, formatClock, formatVisit, PERIOD_LABELS } from './time.js';
+import { nowInTimezone, formatVisit, PERIODS, PERIOD_LABELS } from './time.js';
 
 export const MAX_PEOPLE = 5;
 
@@ -27,9 +27,11 @@ export function ensurePass(db, a) {
 }
 export const peopleIn = (a) => a.checked_in_count ?? a.people_count;
 
-// Text of the WhatsApp pass message (the link goes in the "View pass" button).
-export const passMessage = (a, when) =>
-  `${a.name}, your entry pass for ${when} for ${a.people_count} ${a.people_count === 1 ? 'person' : 'people'}. Entry code: ${a.checkin_code}. Tap "View pass" to open your QR code. It is valid only today and can be scanned only once. Security can also type the entry code.`;
+// Text of the WhatsApp pass messages (the link goes in the "View pass" button).
+const group = (a) => `${a.people_count} ${a.people_count === 1 ? 'person' : 'people'}`;
+const passHowTo = (a) => `Entry code: ${a.checkin_code}. Tap "View pass" to open your QR code. Show it at the entrance any time on the day of your visit. It can be scanned only once, and security can also type the entry code.`;
+export const passMessage = (a, when) => `${a.name}, your entry pass for ${when} for ${group(a)}. ${passHowTo(a)}`;
+export const confirmMessage = (a, when) => `${a.name}, your meeting with Gurudev is confirmed for ${when} for ${group(a)}. ${passHowTo(a)}`;
 
 export const ACTIVE = "('pending', 'hold', 'approved')";
 
@@ -82,28 +84,25 @@ export function viewsWithPeople(db, rows) {
   return rows.map((r) => appointmentView(r, people.get(r.id)));
 }
 
-// Where an appointment's entry pass stands right now. The pass is valid only
-// on the visit day, from the start of its session, and only once.
-export function passState(a, { timeZone, periods, now }) {
+// Where an appointment's entry pass stands right now. The QR code can be
+// shown as soon as the visit is confirmed; it scans any time on the visit
+// day, and only once.
+export function passState(a, { timeZone, now }) {
   if (a.status !== 'approved') return { state: 'inactive' };
   if (a.checked_in_at) return { state: 'checked_in' };
   const today = nowInTimezone(timeZone, now).date;
-  const start = periods[a.period].start;
   if (a.date < today) return { state: 'expired' };
-  if (a.date > today || (!a.express && minutesUntil(a.date, start, timeZone, now) > 0)) {
-    return { state: 'not_yet', opensAt: formatClock(start), opensOn: a.date };
-  }
-  return { state: 'ready' };
+  return { state: 'ready', validOn: a.date, today: a.date === today };
 }
 
 // The session that is on now (or the nearest one today), for express passes.
 export function currentPeriod(periods, time) {
-  for (const p of ['morning', 'afternoon', 'evening']) if (time < periods[p].end) return p;
-  return 'evening';
+  for (const p of PERIODS) if (time < periods[p].end) return p;
+  return PERIODS.at(-1);
 }
 
 // What security sees when scanning a pass.
-export function scanResult(a, { timeZone, periods, now }) {
+export function scanResult(a, { timeZone, now }) {
   if (a.status !== 'approved') {
     const word = { pending: 'not approved yet', hold: 'not approved yet', rejected: 'declined', cancelled: 'cancelled' }[a.status];
     return { result: 'inactive', canAdmit: false, message: `This appointment is ${word}. Do not allow entry.` };
@@ -114,10 +113,6 @@ export function scanResult(a, { timeZone, periods, now }) {
   const today = nowInTimezone(timeZone, now).date;
   if (a.date !== today) {
     return { result: 'wrong_day', canAdmit: false, adminOverride: true, message: `This pass is for ${formatVisit(a)}. It is not valid today.` };
-  }
-  const start = periods[a.period].start;
-  if (!a.express && minutesUntil(a.date, start, timeZone, now) > 0) {
-    return { result: 'early', canAdmit: false, adminOverride: true, message: `${PERIOD_LABELS[a.period]} passes open at ${formatClock(start)}.` };
   }
   return { result: 'ok', canAdmit: true, message: a.express ? 'Valid express pass' : 'Valid pass' };
 }

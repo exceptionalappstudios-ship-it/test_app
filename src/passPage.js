@@ -8,16 +8,16 @@
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-export function renderPassPage({ state, name, visit, people, code, qrSvg, opensText, checkedInTime, express }) {
+export function renderPassPage({ state, name, visit, people, code, qrSvg, validText = 'Valid today', opensText, checkedInTime, express }) {
   const states = {
     ready: () => `
-      <div class="badge ok">Valid today · scan once</div>
+      <div class="badge ok">${esc(validText)} · scan once</div>
       <div class="qr" aria-label="QR code">${qrSvg}</div>
       <div class="code-label">Entry code</div>
       <div class="code">${esc(code)}</div>
       <div class="live"><span class="dot"></span><span id="clock">Live</span></div>
       <div class="band" aria-hidden="true"></div>
-      <p class="note">Show this at the entrance. Security can also type the code. A screenshot will not work: the pass can be scanned only once and security checks your photo.</p>`,
+      <p class="note">Show this at the entrance any time on the day of your visit. Security can also type the code. A screenshot will not work: the pass can be scanned only once and security checks your photo.</p>`,
     not_yet: () => `
       <div class="badge wait">Confirmed</div>
       <p class="big">Your QR pass will appear here on<br><strong>${esc(opensText)}</strong></p>

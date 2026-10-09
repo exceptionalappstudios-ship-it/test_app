@@ -5,15 +5,15 @@ A simple, fast, mobile-first web app (installable on phones) for visits to meet 
 **Visitors** (`/`)
 - Log in with their **WhatsApp number and a one-time code**. First time: add name and a **face photo**. The phone finds
   the face, crops around it and compresses it (~30 KB) so security can recognise them.
-- Book a **day** and **Morning / Afternoon / Evening** (no times shown), then answer: who referred them (**name, phone number
-  and designation**, all required, so the ashram can call to confirm), how many people (1–5), the WhatsApp number for the
+- Book a **day** and **Morning / Evening** (no times shown), then answer: who referred them (**chosen from the reference
+  list**, plus that person's **phone number, which must match**, or they cannot book), how many people (1–5), the WhatsApp number for the
   pass, purpose (blessings / guidance, invitation, project proposal, donation, life event, other) and a few words about the visit.
 - Add the **name and number of each extra person**. Everyone can have only **one upcoming appointment**. If someone already
   has one, the app says when, and asks to cancel it or remove the person.
-- Updates **on WhatsApp and in the app**: request received, confirmed, reminder the day before, greeting on the day, and
-  the **entry pass** when the session opens (8 AM / 1 PM / 4 PM). WhatsApp gets a **6-character entry code** (letters and
+- Updates **on WhatsApp and in the app**: request received, **confirmed (with the entry pass)**, reminder the day before and
+  greeting on the day. WhatsApp gets a **6-character entry code** (letters and
   numbers, no look-alikes such as 0/O or 1/I) and a **"View pass" link** to a tiny pass page (about 5 KB) that opens fast
-  even on a weak signal. The pass works **only that day** and **only once**.
+  even on a weak signal. The pass works **any time on the visit day**, and **only once**.
 - About screenshots: no website can fully block screenshots or screen recording. The pass page shows a live clock and a
   moving band, hides itself when the phone switches apps, and blocks long-press saving. Because each pass can be scanned
   only once and security checks the photo, a copied pass does not help anyone get in twice.
@@ -25,21 +25,23 @@ A simple, fast, mobile-first web app (installable on phones) for visits to meet 
   shows a red **ALREADY CHECKED IN** alert with when and by whom. Today's list lets them correct the number in one tap.
 
 **Admins** (`/admin.html`)
-- **Dashboard**: people checked in vs expected, Morning / Afternoon / Evening progress, a 14-day chart, recent check-ins with
+- The admins are the people on the **reference list** (`src/references.js`). They log in with their **phone number and the
+  admin password** (`ADMIN_PASSWORD` on the host replaces the built-in one). The list can only be changed in that file.
+- **Dashboard**: people checked in vs expected, Morning / Evening progress, a 14-day chart, recent check-ins with
   the security person who let them in. Updates live.
 - **Requests**: Approve, **Hold** (separate list to decide later) or Decline. The reference shows with one-tap call and
   WhatsApp so admins can check it.
-- **Express pass**: let someone in today with just a **name and WhatsApp number** (reference, photo, group size and purpose
-  optional). The QR pass is sent on WhatsApp at once and works for the rest of the day, scanned once.
+- **Express pass**: let someone in today. **Reference** on top (picked from the list), then **name and WhatsApp number**;
+  group size, photo, purpose and note are optional below. The QR pass is sent on WhatsApp at once and works for the rest of the day, scanned once.
 - **Visitors**: any day's list with search, filters (not arrived / checked in / …), counts, and one-tap **call** and **WhatsApp**.
   Admins can also check someone in.
 - **Security**: approve, search, call/WhatsApp, remove access.
 - **Bookings & slots**: one switch to stop or start all new bookings (with a message for visitors), close or open a
-  whole day, and for each Morning / Afternoon / Evening set the number of slots (people) or switch it off.
-- **More**: add admins, WhatsApp delivery log, and the scanner.
+  whole day, and for each Morning / Evening set the number of slots (people) or switch it off.
+- **More**: the admin list, WhatsApp delivery log, and the scanner.
 
 Phone numbers are always **10 digits** (the boxes accept only digits and stop at 10; pasted numbers starting with
-+91 or 0 are cleaned up). Everyone uses the same login. After logging in, each person sees the app for their role. Inner screens have a back arrow,
++91 or 0 are cleaned up). Visitors and security log in with a WhatsApp code; admins with a password. After logging in, each person sees the app for their role. Inner screens have a back arrow,
 and the phone's Back button steps back through the booking and closes pop-ups.
 
 ## Try it on your computer
@@ -48,13 +50,12 @@ Requires Node.js 22.13 or newer.
 
 ```bash
 npm install
-cp .env.example .env      # admins: ADMIN_PHONES in src/index.js, or ADMIN_PHONE
+cp .env.example .env      # admins and references: src/references.js
 npm start
 ```
 
 Open http://localhost:3000. Without WhatsApp set up, login codes are printed in the terminal (and, with
-`SHOW_OTP_ON_SCREEN=1`, shown on screen). Log in at `/admin.html` with an admin number, open **More → Open days and
-sessions**, then book as a visitor from another browser or a private window.
+`SHOW_OTP_ON_SCREEN=1`, shown on screen). Log in at `/admin.html` with an admin number and the admin password, open **More → Bookings & slots**, then book as a visitor from another browser or a private window.
 
 ## Setting up WhatsApp
 
@@ -114,15 +115,16 @@ npm test      # API tests: login codes, roles, booking rules, reminders, pass li
 
 ```
 src/
-  index.js            settings, first admin, scheduled messages every 30 s
+  index.js            settings, admins from the reference list, scheduled messages every 30 s
   app.js              Express app (compression, static files, routes)
-  routes/auth.js      WhatsApp code login, profile, photos
+  routes/auth.js      WhatsApp code login, admin password login, profile, photos
+  references.js       reference list (also the admins) and the admin password hash
   routes/visitor.js   availability, booking rules, my visit, pass
   routes/staff.js     scanner (security + admins)
   routes/admin.js     dashboard, requests, visitors, security staff, sessions, express pass, admins
   passPage.js         the small pass page opened from the WhatsApp link
   appointments.js     pass and scan rules
-  jobs.js             day-before reminder, greeting, QR pass at session start
+  jobs.js             day-before reminder and greeting on the day
   whatsapp.js         WhatsApp Cloud API with a durable send queue
   notify.js           in-app, live updates, push
   db.js               SQLite schema (built-in node:sqlite)

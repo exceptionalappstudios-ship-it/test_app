@@ -1,13 +1,14 @@
 import express from 'express';
 import { transaction, getSetting, setSetting } from '../db.js';
 import { requireAdmin, publicUser } from '../auth.js';
-import { HttpError, text, phone as parsePhone, normalizePhone } from '../http.js';
+import { HttpError, text, phone as parsePhone } from '../http.js';
 import {
-  ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, viewsWithPeople, currentPeriod, newCheckinCode, newPassToken, passMessage,
+  ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, viewsWithPeople, currentPeriod, newCheckinCode, newPassToken, passMessage, confirmMessage,
 } from '../appointments.js';
-import { nowInTimezone, minutesUntil, addDays, dayOfWeek, formatVisit, formatClock, formatDay, PERIODS, DATE_RE } from '../time.js';
+import { nowInTimezone, addDays, dayOfWeek, formatVisit, formatDay, PERIODS, DATE_RE } from '../time.js';
+import { findReference, referenceOfPhone } from '../references.js';
 
-export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
+export function adminRoutes({ db, notifier, config, now, photos }) {
   const router = express.Router();
   const { timeZone, periods } = config;
   const today = () => nowInTimezone(timeZone, now()).date;
@@ -131,16 +132,20 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
       skipReminder ? 1 : 0, skipGreeting ? 1 : 0, appt.id);
 
     const when = formatVisit(appt);
-    const opens = formatClock(periods[appt.period].start);
     const suffix = note ? `\nNote: ${note}` : '';
+    if (approved) {
+      // The confirmation carries the pass link, so it can be opened any time.
+      const a = getAppointment(db, appt.id);
+      db.prepare("UPDATE appointments SET pass_sent_at = COALESCE(pass_sent_at, datetime('now')) WHERE id = ?").run(a.id);
+      notifier.sendPass(a, 'Appointment confirmed ✅',
+        `${confirmMessage(a, when)}${suffix}`);
+    }
     const messages = {
-      approved: ['Appointment confirmed ✅', `Your meeting with Gurudev is confirmed for ${when} for ${appt.people_count} ${appt.people_count === 1 ? 'person' : 'people'}. Your QR entry pass will be sent on WhatsApp on ${formatDay(appt.date)} at ${opens}.${suffix}`],
       rejected: ['Appointment request declined', `We are sorry, your request for ${when} could not be accommodated.${suffix}`],
       cancelled: ['Appointment cancelled', `Your appointment on ${when} has been cancelled by the ashram.${suffix}`],
     };
     if (messages[status]) notifier.notify(appt.user_id, appt.id, ...messages[status], { phone: appt.phone });
     notifier.emitToStaff('appointment', { id: appt.id });
-    if (approved) jobs?.runSoon();
     res.json({ appointment: viewsWithPeople(db, [getAppointment(db, appt.id)])[0] });
   }
 
@@ -166,10 +171,13 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
     if (!Number.isInteger(count) || count < 1 || count > MAX_PEOPLE) throw new HttpError(400, `Please choose between 1 and ${MAX_PEOPLE} people`);
     const photo = typeof body.photo === 'string' && body.photo ? body.photo : null;
     if (photo && !photos.read(photo)) throw new HttpError(400, 'The photo was not saved. Please take it again.');
-    const reference = text(body.reference, 'the reference', 120, { required: false });
-    const refPhone = body.refPhone ? normalizePhone(body.refPhone, config.defaultCountryCode) : null;
-    if (body.refPhone && !refPhone) throw new HttpError(400, "Please check the reference's phone number");
-    const refDesignation = text(body.refDesignation, 'the designation', 80, { required: false });
+    // The reference is picked from the list; their number is filled in for the
+    // admin calls page (the admin's own number when they are the reference).
+    const ref = body.referenceId ? findReference(config.references, body.referenceId) : null;
+    if (body.referenceId && !ref) throw new HttpError(400, 'Please choose the reference from the list');
+    const reference = ref?.name ?? '';
+    const refPhone = ref ? `+${config.defaultCountryCode}${referenceOfPhone([ref], req.user.phone) ? req.user.phone.slice(-10) : ref.phones[0]}` : null;
+    const refDesignation = null;
     const purposes = (Array.isArray(body.purposes) ? body.purposes : []).filter((p) => p in PURPOSES);
     const description = text(body.description, 'the note', 500, { required: false });
 
@@ -244,29 +252,9 @@ export function adminRoutes({ db, notifier, config, now, jobs, photos }) {
 
   // ---- Admin accounts -----------------------------------------------------------------
 
+  // The admins are the people on the reference list (see src/references.js).
   router.get('/admins', (_req, res) => {
     res.json({ admins: db.prepare("SELECT * FROM users WHERE role = 'admin' ORDER BY name").all().map(publicUser) });
-  });
-
-  // Adds an admin by WhatsApp number. They log in with a code like everyone else.
-  router.post('/admins', (req, res) => {
-    const phone = parsePhone(req.body?.phone, config.defaultCountryCode);
-    const name = text(req.body?.name, 'their name', 80, { required: false }) || null;
-    const user = db.prepare(`
-      INSERT INTO users (phone, name, role, status) VALUES (?, ?, 'admin', 'active')
-      ON CONFLICT(phone) DO UPDATE SET role = 'admin', status = 'active', name = COALESCE(users.name, excluded.name)
-      RETURNING *
-    `).get(phone, name);
-    res.json({ admin: publicUser(user) });
-  });
-
-  router.delete('/admins/:id', (req, res) => {
-    const id = Number(req.params.id);
-    if (id === req.user.id) throw new HttpError(400, "You can't remove your own admin access");
-    const done = db.prepare("UPDATE users SET role = 'visitor' WHERE id = ? AND role = 'admin' RETURNING id").get(id);
-    if (!done) throw new HttpError(404, 'Admin not found');
-    db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
-    res.json({ ok: true });
   });
 
   // ---- Bookings on/off and slots -------------------------------------------------------
