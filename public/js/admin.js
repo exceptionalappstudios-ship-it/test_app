@@ -382,18 +382,18 @@ function moreView(ctx) {
 async function sessionsView(ctx) {
   await ensureToday();
   header('Bookings & slots', 'Open or close bookings, and set how many people each session can take.');
-  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  // New days default to 5 days: the chosen start date and the 4 days after it.
+  const SPAN = 4;
   ctx.el.innerHTML = `
     <div class="card" id="master"><div class="spinner"></div></div>
     <details class="card" id="addBox">
       <summary style="font-weight:800;cursor:pointer;font-size:1.05rem">${icons.plus.replace('<svg', '<svg width="18" height="18" style="vertical-align:-3px"')} Open new days</summary>
       <form id="add">
         <div class="two-col">
-          <div><label for="from">From</label><input id="from" name="fromDate" type="date" value="${today}" required></div>
-          <div><label for="to">To</label><input id="to" name="toDate" type="date" value="${addDays(today, 30)}" required></div>
+          <div><label for="from">From</label><input id="from" name="fromDate" type="date" value="${today}" min="${today}" required></div>
+          <div><label for="to">To</label><input id="to" name="toDate" type="date" value="${addDays(today, SPAN)}" min="${today}" required></div>
         </div>
-        <div class="label">Days of the week</div>
-        <div class="chips">${DAYS.map((d, i) => `<label class="tag pick"><input type="checkbox" name="wd" value="${i}" ${i ? 'checked' : ''}> ${d}</label>`).join('')}</div>
+        <div class="hint">Every day from the start date to the end date is opened.</div>
         <div class="label">Times of day</div>
         <div class="chips">${Object.entries(config.periods).map(([k, p]) => `<label class="tag pick"><input type="checkbox" name="period" value="${k}" checked> ${esc(p.label)}</label>`).join('')}</div>
         <label for="cap">Slots per session (people)</label>
@@ -453,13 +453,26 @@ async function sessionsView(ctx) {
     }).join('') : '<div class="card empty">No days open yet. Use "Open new days" above.</div>';
   };
 
+  // The end date follows the start date (5 days) until it is changed by hand.
+  const from = $('#from', ctx.el);
+  const to = $('#to', ctx.el);
+  let toEdited = false;
+  to.addEventListener('input', () => { toEdited = true; });
+  from.addEventListener('input', () => {
+    if (!from.value) return;
+    to.min = from.value;
+    if (!toEdited || to.value < from.value) to.value = addDays(from.value, SPAN);
+  });
+
   $('#add', ctx.el).addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     const body = {
       fromDate: f.fromDate.value, toDate: f.toDate.value, capacity: Number(f.capacity.value),
-      weekdays: $$('[name=wd]:checked', f).map((i) => Number(i.value)), periods: $$('[name=period]:checked', f).map((i) => i.value),
+      periods: $$('[name=period]:checked', f).map((i) => i.value),
     };
+    if (body.toDate < body.fromDate) { toast('The end date must be on or after the start date.'); return; }
+    if (!body.periods.length) { toast('Please choose Morning, Evening or both.'); return; }
     const { created, skipped } = await busy($('button[type=submit]', f), () => api('/api/admin/sessions', { method: 'POST', body }));
     toast(`${plural(created, 'session')} opened${skipped ? ` (${skipped} already open)` : ''}.`);
     $('#addBox', ctx.el).open = false;

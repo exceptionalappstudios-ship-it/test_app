@@ -37,7 +37,8 @@ A simple, fast, mobile-first web app (installable on phones) for visits to meet 
 - **Visitors**: any day's list with search, filters (not arrived / checked in / …), counts, and one-tap **call** and **WhatsApp**.
   Admins can also check someone in.
 - **Security**: approve, search, call/WhatsApp, remove access.
-- **Bookings & slots**: one switch to stop or start all new bookings (with a message for visitors), close or open a
+- **Bookings & slots**: one switch to stop or start all new bookings (with a message for visitors), open a date range
+  (5 days by default from the chosen start date), close or open a
   whole day, and for each Morning / Evening set the number of slots (people) or switch it off.
 - **More**: the admin list, WhatsApp delivery log, and the scanner.
 
