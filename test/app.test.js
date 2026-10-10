@@ -713,6 +713,23 @@ test('WhatsApp through mart2meta: login codes use the authentication template; o
   assert.deepEqual(rows.map((r) => [r.kind, r.status]), [['otp', 'sent'], ['update', 'logged']]);
   assert.equal(rows[0].payload, '{}'); // the code is not kept
 
+  // "Template not found" in one language: the other English codes are tried and the working one kept.
+  const langs = [];
+  const picky = createWhatsApp(db, {
+    appUrl: 'https://app.example',
+    whatsapp: { provider: 'mart2meta', token: 't', phoneNumberId: '1', vendorUid: 'u', baseUrl: 'https://x', otpTemplate: 'appointment_test_ashram', language: 'en' },
+    fetch: async (_url, opts) => {
+      const lang = JSON.parse(opts.body).template_language;
+      langs.push(lang);
+      return { ok: true, text: async () => (lang === 'en_US' ? '{"result":"success"}' : '{"result":"failed","message":"Template not found in the system"}') };
+    },
+  });
+  picky.sendOtp('+919800000001', '111111');
+  await picky.kick();
+  picky.sendOtp('+919800000002', '222222');
+  await picky.kick();
+  assert.deepEqual(langs, ['en', 'en_US', 'en_US']);
+
   // A provider error inside a 200 answer is retried, not treated as sent.
   const failing = createWhatsApp(db, {
     appUrl: 'https://app.example',

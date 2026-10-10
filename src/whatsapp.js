@@ -65,6 +65,31 @@ export function createWhatsApp(db, config) {
     return data;
   }
 
+  // mart2meta finds a template by name and language code, and "English" may be
+  // stored as en, en_US or en_GB. Each is tried once; the one that works is kept.
+  const languageFor = new Map();
+  async function sendMart2meta(row) {
+    const body = mart2metaBody(row);
+    const known = languageFor.get(body.template_name);
+    const tries = known ? [known] : [...new Set([wa.language, 'en', 'en_US', 'en_GB'])];
+    let lastErr;
+    for (const lang of tries) {
+      try {
+        await post(`${wa.baseUrl}/${wa.vendorUid}/contact/send-template-message`, { ...body, template_language: lang });
+        if (known !== lang) {
+          languageFor.set(body.template_name, lang);
+          console.log(`WhatsApp template ${body.template_name} works with language ${lang}`);
+        }
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (!/template not found/i.test(err.message)) throw err;
+      }
+    }
+    languageFor.delete(body.template_name);
+    throw new Error(`${lastErr.message} (tried language ${tries.join(', ')}; check the template name and that it is approved in mart2meta)`);
+  }
+
   // mart2meta: one template per message, variables as field_1, field_2, ...
   function mart2metaBody(row) {
     const p = JSON.parse(row.payload);
@@ -104,7 +129,7 @@ export function createWhatsApp(db, config) {
 
   async function deliver(row) {
     try {
-      if (mart2meta) await post(`${wa.baseUrl}/${wa.vendorUid}/contact/send-template-message`, mart2metaBody(row));
+      if (mart2meta) await sendMart2meta(row);
       else await post(graph('messages'), templateBody(row));
       markSent.run(row.id);
     } catch (err) {
