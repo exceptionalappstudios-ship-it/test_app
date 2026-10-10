@@ -61,13 +61,17 @@ export function visitorRoutes({ db, notifier, config, now }) {
   // ---- Booking ---------------------------------------------------------------
 
   // Each person can hold only one upcoming appointment, whether they booked
-  // it or were added to someone else's group.
+  // it or were added to someone else's group. Someone else's request only
+  // blocks a number once it is confirmed, so nobody can lock others out by
+  // typing their numbers into a request (admins are warned again on approval).
   const conflictsFor = (phones, self = null) => {
     if (!phones.length) return [];
     return db.prepare(`
       SELECT ap.phone, ap.name, ap.is_booker, a.name AS booked_by, a.date, a.period, a.status FROM appointment_people ap
       JOIN appointments a ON a.id = ap.appointment_id
+      JOIN users owner ON owner.id = a.user_id
       WHERE ap.phone IN (${phones.map(() => '?').join(',')}) AND a.status IN ${ACTIVE} AND a.date >= ?
+        AND (a.status = 'approved' OR owner.phone = ap.phone)
     `).all(...phones, today()).map((c) => {
       const inGroup = c.is_booker ? '' : ` in ${c.booked_by}'s group`;
       const message = c.phone === self
@@ -100,14 +104,17 @@ export function visitorRoutes({ db, notifier, config, now }) {
   // The visitor picks their reference from the list and types that person's
   // phone number; it must match. Wrong numbers are limited so the list can't
   // be guessed.
+  const wrongReferenceIp = rateLimiter({ max: 30, windowMs: 60 * 60_000, message: 'Too many wrong reference numbers. Please try again in an hour.' });
   const wrongReference = rateLimiter({ max: 10, windowMs: 60 * 60_000, message: 'Too many wrong reference numbers. Please check the number with your reference and try again in an hour.' });
   function checkReference(req) {
     const ref = findReference(config.references, req.body?.referenceId);
     if (!ref) throw new HttpError(400, 'Please choose who referred you from the list');
     const refPhone = parsePhone(req.body?.refPhone, config.defaultCountryCode, `${ref.name}'s phone number`);
     wrongReference.check(req.user.id);
+    wrongReferenceIp.check(req.ip);
     if (!referenceHasPhone(ref, refPhone)) {
       wrongReference(req.user.id);
+      wrongReferenceIp(req.ip);
       throw new HttpError(400, `This number does not match ${ref.name}. Please check the number with your reference. You can book only with the right number.`);
     }
     return { reference: ref.name, refPhone };
@@ -124,9 +131,12 @@ export function visitorRoutes({ db, notifier, config, now }) {
     res.json({ conflicts: conflictsFor(phones, req.user.phone) });
   });
 
+  // Each request sends WhatsApp messages, so booking again and again is limited.
+  const bookingLimit = rateLimiter({ max: 6, windowMs: 24 * 60 * 60_000, message: 'Too many booking requests today. Please try again tomorrow.' });
   router.post('/appointments', requireProfile, (req, res) => {
     const body = req.body ?? {};
     const user = req.user;
+    bookingLimit.check(user.id);
     const { reference, refPhone } = checkReference(req);
     const refDesignation = null;
     const purposes = [...new Set(Array.isArray(body.purposes) ? body.purposes : [])].filter((p) => p in PURPOSES);
@@ -162,6 +172,7 @@ export function visitorRoutes({ db, notifier, config, now }) {
       return appt.id;
     });
 
+    bookingLimit(user.id); // counts only requests that were made
     const appt = getAppointment(db, appointmentId);
     notifier.notify(user.id, appt.id, 'Request received 🙏',
       `We have received your request to meet Gurudev on ${formatVisit(appt)} for ${count} ${count === 1 ? 'person' : 'people'}. We will send you a confirmation after it is reviewed.`,
@@ -212,9 +223,22 @@ export function visitorRoutes({ db, notifier, config, now }) {
     res.json({ appointment: appointmentView(appt), pass });
   });
 
+  // The server later sends to this address, so only the browsers' real push
+  // services are accepted (otherwise it could be pointed at internal systems).
+  const PUSH_HOSTS = /^(fcm\.googleapis\.com|android\.googleapis\.com|updates\.push\.services\.mozilla\.com|[a-z0-9.-]+\.push\.apple\.com|[a-z0-9.-]+\.notify\.windows\.com)$/;
+  const validPushEndpoint = (endpoint) => {
+    if (typeof endpoint !== 'string' || endpoint.length > 1000) return false;
+    try {
+      const u = new URL(endpoint);
+      return u.protocol === 'https:' && !u.port && !u.username && PUSH_HOSTS.test(u.hostname);
+    } catch { return false; }
+  };
+  const pushKey = (v) => typeof v === 'string' && /^[\w-]{10,200}$/.test(v);
   router.post('/me/push-subscriptions', requireUser, (req, res) => {
     const { endpoint, keys } = req.body ?? {};
-    if (typeof endpoint !== 'string' || !/^https:\/\//.test(endpoint) || !keys?.p256dh || !keys?.auth) throw new HttpError(400, 'Invalid push subscription');
+    if (!validPushEndpoint(endpoint) || !pushKey(keys?.p256dh) || !pushKey(keys?.auth)) throw new HttpError(400, 'Invalid push subscription');
+    // Keep at most 5 devices per person.
+    db.prepare('DELETE FROM push_subscriptions WHERE user_id = ? AND id NOT IN (SELECT id FROM push_subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 4)').run(req.user.id, req.user.id);
     db.prepare(`
       INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)
       ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth

@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import { HttpError } from './http.js';
 
-const SESSION_DAYS = 60;
+// Admin logins expire sooner, as they can see everyone's details.
+const SESSION_DAYS = { admin: 3, security: 30, visitor: 60 };
 const OTP_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
 export const SESSION_COOKIE = 'sid';
@@ -69,11 +70,12 @@ export function sessionMiddleware(db) {
 
 export function startSession(db, res, user, { secureCookies }) {
   const token = newToken();
+  const days = SESSION_DAYS[user.role] ?? 30;
   db.prepare("DELETE FROM auth_sessions WHERE expires_at <= datetime('now')").run();
-  db.prepare(`INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES (?, ?, datetime('now', '+${SESSION_DAYS} days'))`)
+  db.prepare(`INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES (?, ?, datetime('now', '+${Number(days)} days'))`)
     .run(hashToken(token), user.id);
   res.cookie(SESSION_COOKIE, token, {
-    httpOnly: true, sameSite: 'lax', secure: secureCookies, maxAge: SESSION_DAYS * 86400_000, path: '/',
+    httpOnly: true, sameSite: 'lax', secure: secureCookies, maxAge: days * 86400_000, path: '/',
   });
 }
 

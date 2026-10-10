@@ -42,6 +42,7 @@ beforeEach(async () => {
 afterEach(() => { server.closeAllConnections(); server.close(); });
 
 const flush = () => app.locals.whatsapp.kick();
+const codeOf = (id) => db.prepare('SELECT checkin_code FROM appointments WHERE id = ?').get(id).checkin_code;
 const messagesTo = (phone) => sent.filter((s) => s.body?.to === phone.replace('+', ''));
 const templateText = (s) => s.body.template.components.find((c) => c.type === 'body').parameters.map((p) => p.text).join(' | ');
 
@@ -239,9 +240,18 @@ test('booking asks for reference, people, purposes and checks everyone has only 
   await flush();
   assert.match(templateText(messagesTo('+919876500000').at(-1)), /Request received/);
 
-  // One appointment at a time, and group members are blocked too.
+  // One appointment at a time.
   assert.equal((await v('/api/appointments', { method: 'POST', body: booking(sid) })).status, 409);
+  // Someone else's request can't lock Meera out while it is only a request...
   const meera = await visitor('9123456780', 'Meera Rao');
+  const own = await meera('/api/appointments', { method: 'POST', body: booking(sid) });
+  assert.equal(own.status, 201);
+  // ...but only one of the two can be confirmed.
+  assert.equal((await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: {} })).status, 200);
+  const clash = await a(`/api/admin/appointments/${own.body.appointment.id}/approve`, { method: 'POST', body: {} });
+  assert.deepEqual([clash.status, clash.body.error], [409, 'Meera Rao already has a confirmed visit on Friday, 11 January (Morning). Each person can have only one appointment.']);
+  // Once Asha's group is confirmed, Meera can't book again.
+  await meera(`/api/me/appointments/${own.body.appointment.id}/cancel`, { method: 'POST' });
   const res = await meera('/api/appointments', { method: 'POST', body: booking(sid) });
   assert.equal(res.status, 409);
   assert.match(res.body.error, /You already have an appointment in Asha Rao's group/);
@@ -395,7 +405,7 @@ test('dashboard, date list with search, and who checked people in', async () => 
   await a(`/api/admin/appointments/${a2.id}/approve`, { method: 'POST', body: {} });
   const s = await login('9811111111', { signupAs: 'security', name: 'Ramesh Guard' });
   await a(`/api/admin/security/${(await a('/api/admin/security')).body.staff[0].id}/approve`, { method: 'POST' });
-  await s('/api/staff/admit', { method: 'POST', body: { appointmentId: a1.id } });
+  await s('/api/staff/admit', { method: 'POST', body: { code: codeOf(a1.id) } });
 
   const d = (await a('/api/admin/dashboard')).body;
   assert.deepEqual(
@@ -457,7 +467,14 @@ test('security can correct how many people came in', async () => {
   await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: {} });
   const s = await login('9811111111', { signupAs: 'security', name: 'Ramesh Guard' });
   await a(`/api/admin/security/${(await a('/api/admin/security')).body.staff[0].id}/approve`, { method: 'POST' });
-  const admitted = (await s('/api/staff/admit', { method: 'POST', body: { appointmentId: appt.id, count: 3 } })).body.appointment;
+  // Security can't look passes up by appointment number, only by code.
+  assert.equal((await s('/api/staff/scan', { method: 'POST', body: { appointmentId: appt.id } })).status, 404);
+  const scanned = (await s('/api/staff/scan', { method: 'POST', body: { code: codeOf(appt.id) } })).body.appointment;
+  // ...and they see no phone numbers, reference or notes.
+  assert.deepEqual([scanned.phone, scanned.refPhone, scanned.reference, scanned.description, scanned.people[0].phone], [undefined, undefined, undefined, undefined, undefined]);
+  assert.equal(scanned.people[0].name, 'P1');
+  assert.ok(scanned.photo);
+  const admitted = (await s('/api/staff/admit', { method: 'POST', body: { code: codeOf(appt.id), count: 3 } })).body.appointment;
   assert.deepEqual([admitted.peopleCount, admitted.checkedInCount], [5, 3]);
   let d = (await a('/api/admin/dashboard')).body.summary;
   assert.deepEqual([d.people, d.checkedInPeople, d.remainingPeople], [5, 3, 0]);
@@ -570,4 +587,56 @@ test('a database from the previous version is upgraded in place', async () => {
   assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version, 5);
   assert.ok(upgraded.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'reference_id'));
   assert.ok(fs.existsSync(file));
+});
+
+test('every admin and staff route refuses people without access', async () => {
+  const routesOf = (router, prefix) => router.stack.filter((l) => l.route).flatMap((l) => Object.keys(l.route.methods).map((m) => [m.toUpperCase(), prefix + l.route.path.replace(/:\w+/g, '1')]));
+  const { adminRoutes } = await import('../src/routes/admin.js');
+  const { staffRoutes } = await import('../src/routes/staff.js');
+  const fake = { db, notifier: app.locals.notifier, config: { ...app.locals.config }, now: () => clock, photos: app.locals.photos };
+  const adminOnly = routesOf(adminRoutes(fake), '/api/admin');
+  const staffOnly = routesOf(staffRoutes(fake), '/api/staff');
+  assert.ok(adminOnly.length > 15 && staffOnly.length >= 4);
+  const v = await visitor();
+  const pendingGuard = await login('9811111111', { signupAs: 'security', name: 'Ramesh Guard' });
+  for (const [who, c, routes] of [['anonymous', client(), [...adminOnly, ...staffOnly]], ['visitor', v, [...adminOnly, ...staffOnly]], ['pending security', pendingGuard, [...adminOnly, ...staffOnly]]]) {
+    for (const [method, path] of routes) {
+      if (path.endsWith('/stream')) continue;
+      const res = await c(path, { method, body: method === 'GET' ? undefined : {} });
+      assert.ok([401, 403].includes(res.status), `${who} ${method} ${path} -> ${res.status}`);
+    }
+  }
+  // Approved security can use the scanner but nothing in the admin area.
+  const a = await admin();
+  await a(`/api/admin/security/${(await a('/api/admin/security')).body.staff[0].id}/approve`, { method: 'POST' });
+  for (const [method, path] of adminOnly) {
+    const res = await pendingGuard(path, { method, body: method === 'GET' ? undefined : {} });
+    assert.equal(res.status, 403, `security ${method} ${path} -> ${res.status}`);
+  }
+  assert.equal((await pendingGuard('/api/staff/recent')).status, 200);
+});
+
+test('push subscriptions only go to real push services', async () => {
+  const v = await visitor();
+  const keys = { p256dh: 'BOr0LWTE6IiF4rdWtjkRkcn8UDvjJgK6', auth: 'k8JV6sjdbhAi-n2a' };
+  for (const endpoint of ['https://169.254.169.254/latest', 'https://localhost/x', 'http://fcm.googleapis.com/fcm/send/x', 'https://fcm.googleapis.com.evil.example/x', 'https://evil.example/fcm.googleapis.com']) {
+    assert.equal((await v('/api/me/push-subscriptions', { method: 'POST', body: { endpoint, keys } })).status, 400, endpoint);
+  }
+  assert.equal((await v('/api/me/push-subscriptions', { method: 'POST', body: { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys } })).status, 201);
+});
+
+test('pages send browser protections, and names lose hidden characters', async () => {
+  const r = await fetch(`${base}/admin.html`);
+  assert.match(r.headers.get('content-security-policy'), /script-src 'self'/);
+  assert.match(r.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.equal(r.headers.get('x-frame-options'), 'DENY');
+  assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(r.headers.get('x-powered-by'), null);
+  const api = await fetch(`${base}/api/config`);
+  assert.equal(api.headers.get('cache-control'), 'no-store');
+  // A request from another website is refused even without an Origin header.
+  assert.equal((await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
+  const v = await visitor();
+  const named = (await v('/api/auth/me', { method: 'PATCH', body: { name: 'Asha‮ Rao\u0000<b>' } })).body.user.name;
+  assert.equal(named, 'Asha Rao <b>');
 });

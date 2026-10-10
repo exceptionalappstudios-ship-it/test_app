@@ -7,6 +7,9 @@ export function authRoutes({ db, whatsapp, notifier, config, photos }) {
   const router = express.Router();
   const perPhone = rateLimiter({ max: 5, windowMs: 60 * 60_000, message: 'Too many codes requested for this number. Please try again in an hour.' });
   const perIp = rateLimiter({ max: 30, windowMs: 60 * 60_000 });
+  // Each code is a paid WhatsApp message: cap per number per day and overall.
+  const perPhoneDay = rateLimiter({ max: 10, windowMs: 24 * 60 * 60_000, message: 'Too many codes requested for this number today. Please try again tomorrow.' });
+  const overall = rateLimiter({ max: 600, windowMs: 60 * 60_000, message: 'Too many people are logging in right now. Please try again in a few minutes.' });
   const verifyLimit = rateLimiter({ max: 20, windowMs: 15 * 60_000 });
   const findByPhone = db.prepare('SELECT * FROM users WHERE phone = ?');
 
@@ -15,6 +18,8 @@ export function authRoutes({ db, whatsapp, notifier, config, photos }) {
     const phone = parsePhone(req.body?.phone, config.defaultCountryCode);
     perIp(req.ip);
     perPhone(phone);
+    perPhoneDay(phone);
+    overall('all');
     const user = findByPhone.get(phone);
     if (user?.role === 'admin') throw new HttpError(400, 'This is an admin number. Please log in on the admin page with your password.');
     const code = issueOtp(db, phone);
@@ -49,15 +54,20 @@ export function authRoutes({ db, whatsapp, notifier, config, photos }) {
   // tries count towards the limits.
   const wrongPerIp = rateLimiter({ max: 20, windowMs: 15 * 60_000 });
   const wrongPerPhone = rateLimiter({ max: 8, windowMs: 15 * 60_000, message: 'Too many wrong tries for this number. Please wait 15 minutes.' });
-  router.post('/password', (req, res) => {
+  const wrongPerPhoneDay = rateLimiter({ max: 30, windowMs: 24 * 60 * 60_000, message: 'Too many wrong tries for this number today. Please try again tomorrow.' });
+  const attempts = rateLimiter({ max: 300, windowMs: 60_000, message: 'The server is busy. Please try again in a minute.' });
+  router.post('/password', async (req, res) => {
     const phone = parsePhone(req.body?.phone, config.defaultCountryCode);
+    attempts('all');
     wrongPerIp.check(req.ip);
     wrongPerPhone.check(phone);
+    wrongPerPhoneDay.check(phone);
     const user = findByPhone.get(phone);
-    const ok = checkPassword(req.body?.password, config.adminPasswordHash);
+    const ok = await checkPassword(req.body?.password, config.adminPasswordHash);
     if (!ok || user?.role !== 'admin' || user.status !== 'active') {
       wrongPerIp(req.ip);
       wrongPerPhone(phone);
+      wrongPerPhoneDay(phone);
       throw new HttpError(400, 'Wrong number or password.');
     }
     startSession(db, res, user, config);
@@ -86,9 +96,16 @@ export function authRoutes({ db, whatsapp, notifier, config, photos }) {
   });
 
   // The browser sends a small JPEG it has already cropped to the face.
-  router.post('/me/photo', requireUser, express.raw({ type: ['image/jpeg', 'application/octet-stream'], limit: '450kb' }), (req, res) => {
+  // Uploads are limited, and a replaced photo is deleted unless a booking
+  // still shows it, so the disk can't be filled.
+  const photoLimit = rateLimiter({ max: 15, windowMs: 60 * 60_000, message: 'Too many photos. Please try again later.' });
+  const photoInUse = db.prepare('SELECT 1 FROM appointments WHERE photo = ? LIMIT 1');
+  router.post('/me/photo', requireUser, (req, _res, next) => { photoLimit(req.user.id); next(); },
+    express.raw({ type: ['image/jpeg', 'application/octet-stream'], limit: '450kb' }), (req, res) => {
     const name = photos.save(req.body);
+    const old = req.user.photo;
     const user = db.prepare('UPDATE users SET photo = ? WHERE id = ? RETURNING *').get(name, req.user.id);
+    if (old && old !== name && !photoInUse.get(old)) photos.remove(old);
     if (user.role === 'security') notifier.emitToStaff('security');
     res.json({ user: publicUser(user) });
   });

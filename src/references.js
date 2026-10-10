@@ -22,10 +22,12 @@ export function hashPassword(password) {
   return `scrypt$${salt}$${crypto.scryptSync(password, salt, 32).toString('base64url')}`;
 }
 
-export function checkPassword(password, stored) {
+// Runs off the main thread, so password checks can't freeze the server.
+const scrypt = (password, salt) => new Promise((resolve, reject) => crypto.scrypt(password, salt, 32, (err, key) => (err ? reject(err) : resolve(key))));
+export async function checkPassword(password, stored) {
   const [kind, salt, hash] = String(stored ?? '').split('$');
-  if (kind !== 'scrypt' || !salt || !hash || typeof password !== 'string' || !password) return false;
-  const given = crypto.scryptSync(password, salt, 32);
+  if (kind !== 'scrypt' || !salt || !hash || typeof password !== 'string' || !password || password.length > 200) return false;
+  const given = await scrypt(password, salt);
   const want = Buffer.from(hash, 'base64url');
   return given.length === want.length && crypto.timingSafeEqual(given, want);
 }

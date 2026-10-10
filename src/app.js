@@ -41,11 +41,39 @@ export const DEFAULT_CONFIG = {
 
 // Rejects state-changing requests coming from other websites.
 function sameOriginOnly(req, _res, next) {
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
+  if (req.get('sec-fetch-site') === 'cross-site') return next(new HttpError(403, 'Cross-site request blocked'));
   const origin = req.get('origin');
-  if (req.method === 'GET' || !origin) return next();
+  if (!origin) return next();
   let host = null;
   try { host = new URL(origin).host; } catch { /* "null" or malformed */ }
   next(host === req.get('host') ? undefined : new HttpError(403, 'Cross-site request blocked'));
+}
+
+// Browser protections for every response. Pages may only run this site's own
+// scripts, can't be shown inside another site (clickjacking), and may use the
+// camera only for themselves. API answers are never cached (shared phones).
+const CSP = [
+  "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:", "media-src 'self' blob:", "connect-src 'self'", "worker-src 'self'",
+  "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'",
+].join('; ');
+function securityHeaders(config) {
+  const https = config.appUrl.startsWith('https://');
+  return (req, res, next) => {
+    res.set({
+      'Content-Security-Policy': CSP,
+      'X-Frame-Options': 'DENY',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'same-origin',
+      'Permissions-Policy': 'camera=(self), microphone=(), geolocation=(), payment=(), usb=()',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      ...(https && { 'Strict-Transport-Security': 'max-age=31536000; includeSubDomains' }),
+      ...(req.path.startsWith('/api/') && !req.path.startsWith('/api/photos/') && { 'Cache-Control': 'no-store' }),
+    });
+    next();
+  };
 }
 
 export function createApp({ db, config: overrides = {}, now = () => new Date() }) {
@@ -58,7 +86,9 @@ export function createApp({ db, config: overrides = {}, now = () => new Date() }
   const ctx = { db, whatsapp, notifier, photos, jobs, config, now };
 
   const app = express();
+  app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy);
+  app.use(securityHeaders(config));
   app.locals = Object.assign(app.locals, ctx);
 
   // Compress everything except live event streams.

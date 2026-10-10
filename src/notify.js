@@ -24,7 +24,13 @@ export function createNotifier(db, { vapidSubject, whatsapp }) {
 
   const send = (res, event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
+  // Live connections are capped (each holds a socket open): 5 per person, and
+  // a total well above 1,000 visitors plus staff.
+  const MAX_STREAMS = 10000;
+  const MAX_PER_PERSON = 5;
+  let streamCount = 0;
   function openStream(req, res, set, key) {
+    if (streamCount >= MAX_STREAMS) return res.status(503).json({ error: 'Busy, please retry' });
     res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     res.flushHeaders();
     res.write('retry: 5000\n\n');
@@ -33,12 +39,23 @@ export function createNotifier(db, { vapidSubject, whatsapp }) {
       if (!userStreams.has(key)) userStreams.set(key, new Set());
       streams = userStreams.get(key);
     }
+    // The oldest connection of this person is closed to make room.
+    if (key !== undefined && streams.size >= MAX_PER_PERSON) {
+      const oldest = streams.values().next().value;
+      streams.delete(oldest);
+      oldest.destroy();
+    }
     streams.add(res);
+    streamCount++;
     const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-    req.on('close', () => {
+    let closed = false;
+    res.on('close', () => {
+      if (closed) return;
+      closed = true;
       clearInterval(ping);
+      streamCount--;
       streams.delete(res);
-      if (key !== undefined && streams.size === 0) userStreams.delete(key);
+      if (key !== undefined && streams.size === 0 && userStreams.get(key) === streams) userStreams.delete(key);
     });
   }
 
@@ -51,7 +68,7 @@ export function createNotifier(db, { vapidSubject, whatsapp }) {
   async function sendPush(userId, payload) {
     await Promise.all(subscriptions.all(userId).map(async (s) => {
       try {
-        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(payload));
+        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(payload), { timeout: 5000, TTL: 86400 });
       } catch (err) {
         if (err.statusCode === 404 || err.statusCode === 410) db.prepare('DELETE FROM push_subscriptions WHERE id = ?').run(s.id);
       }

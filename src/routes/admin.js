@@ -1,7 +1,7 @@
 import express from 'express';
 import { transaction, getSetting, setSetting } from '../db.js';
 import { requireAdmin, publicUser } from '../auth.js';
-import { HttpError, text, phone as parsePhone } from '../http.js';
+import { HttpError, text, phone as parsePhone, rateLimiter } from '../http.js';
 import {
   ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, viewsWithPeople, currentPeriod, newCheckinCode, newPassToken, passMessage, confirmMessage,
 } from '../appointments.js';
@@ -75,7 +75,7 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
     const where = [];
     const args = [];
     const { status, period, checked } = req.query;
-    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 60) : '';
     if (DATE_RE.test(req.query.date ?? '')) { where.push('a.date = ?'); args.push(req.query.date); }
     else { where.push('a.date >= ?'); args.push(today()); }
     if (['pending', 'hold', 'approved', 'rejected', 'cancelled'].includes(status)) { where.push('a.status = ?'); args.push(status); }
@@ -121,6 +121,16 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
     const t = today();
     const tomorrow = addDays(t, 1);
     const approved = status === 'approved';
+    if (approved) {
+      // Nobody in the group may already have another confirmed visit.
+      const clash = db.prepare(`
+        SELECT ap.name, a.date, a.period FROM appointment_people mine
+        JOIN appointment_people ap ON ap.phone = mine.phone AND ap.appointment_id != mine.appointment_id
+        JOIN appointments a ON a.id = ap.appointment_id
+        WHERE mine.appointment_id = ? AND a.status = 'approved' AND a.date >= ? LIMIT 1
+      `).get(appt.id, t);
+      if (clash) throw new HttpError(409, `${clash.name} already has a confirmed visit on ${formatVisit(clash)}. Each person can have only one appointment.`);
+    }
     // A late approval already says everything the earlier reminders would.
     const skipReminder = approved && (appt.date === t || (appt.date === tomorrow && nowInTimezone(timeZone, now()).time >= config.reminderTime));
     const skipGreeting = approved && appt.date === t;
@@ -161,7 +171,8 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
   // pass is approved at once, valid for the rest of today, and sent on WhatsApp.
 
   // Photo taken by the admin for an express pass (optional).
-  router.post('/photos', express.raw({ type: ['image/jpeg', 'application/octet-stream'], limit: '450kb' }), (req, res) => {
+  const photoLimit = rateLimiter({ max: 60, windowMs: 60 * 60_000, message: 'Too many photos. Please try again later.' });
+  router.post('/photos', (req, _res, next) => { photoLimit(req.user.id); next(); }, express.raw({ type: ['image/jpeg', 'application/octet-stream'], limit: '450kb' }), (req, res) => {
     res.status(201).json({ photo: photos.save(req.body) });
   });
 
@@ -224,7 +235,7 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
   });
 
   router.get('/security', (req, res) => {
-    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 60) : '';
     const digits = q.replace(/\D/g, '');
     const rows = db.prepare(`
       SELECT u.*, r.name AS reviewed_by_name,

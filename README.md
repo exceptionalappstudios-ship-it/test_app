@@ -103,6 +103,33 @@ log in with any visitor or security number, so connect WhatsApp before real use,
   with double check-ins refused. Pages use no web fonts or frameworks, responses are compressed, and photos are ~30 KB.
 - Personal data (phone numbers, face photos) is only visible to the person themselves, approved security staff and admins.
 
+## Security
+
+What protects the app (each is covered by the tests in `test/app.test.js`):
+
+- **Logins**: WhatsApp codes are random, hashed, single-use, expire in 10 minutes, and allow 5 tries; requests are limited per
+  number, per connection, per day and overall (each code is a paid message). Admin passwords are checked with scrypt off the
+  main thread; only wrong tries count, limited per number (8 per 15 minutes, 30 a day) and per connection. Wrong numbers and
+  wrong passwords get the same answer. Sessions are random tokens stored hashed, in an HttpOnly, SameSite cookie (Secure on
+  HTTPS); admin sessions last 3 days, security 30, visitors 60.
+- **Who sees what**: every admin route needs an admin, every scanner route an approved security person or admin (checked on
+  each request, so removing access works at once). Security find passes **only by their code**, see only name, photo, group
+  names and visit (no phone numbers, reference or notes), and are limited on wrong codes. Photos are visible only to their
+  owner and staff, under random names. Visitors can only see and cancel their own visits.
+- **Other websites**: strict Content-Security-Policy (only this site's scripts), no framing (clickjacking), nosniff, HSTS,
+  same-origin referrer, camera only for this site, and state-changing requests from other sites are refused.
+- **Abuse**: bookings (6 a day), photo uploads (15 an hour; a replaced photo is deleted), reference guesses (10 a person and
+  30 a connection per hour), push sign-ups (real push services only, 5 devices) and live connections (5 per person) are
+  limited. Someone else's request can't lock a number out; a number is blocked only by a confirmed visit, and admins can't
+  confirm two visits for the same person. Names lose hidden and direction-changing characters. All database queries use
+  parameters; error messages never show internals.
+
+**Before real visitors use it** (kept for the demo on purpose):
+1. Connect WhatsApp, so login codes are no longer shown on screen. Until then anyone can log in as any visitor or security
+   number.
+2. Set `ADMIN_PASSWORD` on the host to a long, private password (or give each admin their own), and remove the Demo
+   reference/admin (1234567890) from `src/references.js`.
+
 ## Interactive preview
 
 `npm run build:preview` builds `preview/dist/preview.html`: one page running the visitor, admin and security apps side by

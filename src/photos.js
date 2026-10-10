@@ -22,6 +22,11 @@ export function createPhotoStore(dir) {
       else memory.set(name, buffer);
       return name;
     },
+    remove(name) {
+      if (!PHOTO_NAME_RE.test(name ?? '')) return;
+      if (!dir) memory.delete(name);
+      else fs.rmSync(path.join(dir, name), { force: true });
+    },
     read(name) {
       if (!PHOTO_NAME_RE.test(name)) return null;
       if (!dir) return memory.get(name) ?? null;

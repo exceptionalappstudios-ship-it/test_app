@@ -7,8 +7,12 @@ export class HttpError extends Error {
   }
 }
 
+// Control characters and text-direction overrides are removed, so a name
+// can't hide or reorder what admins and security read.
+const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
+
 export function text(value, field, max, { required = true } = {}) {
-  const v = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  const v = typeof value === 'string' ? value.replace(INVISIBLE, ' ').trim().replace(/\s+/g, ' ') : '';
   if (!v && required) throw new HttpError(400, `Please enter ${field}`);
   if (v.length > max) throw new HttpError(400, `${field[0].toUpperCase() + field.slice(1)} must be at most ${max} characters`);
   return v;
@@ -40,7 +44,11 @@ export function rateLimiter({ max, windowMs, message = 'Too many attempts. Pleas
     const entry = hits.get(key);
     if (!entry || entry.reset < now) {
       hits.set(key, { count: 1, reset: now + windowMs });
-      if (hits.size > 50000) for (const [k, e] of hits) if (e.reset < now) hits.delete(k);
+      if (hits.size > 50000) {
+        for (const [k, e] of hits) if (e.reset < now) hits.delete(k);
+        // Still too many (a flood of new keys): forget the oldest so memory stays bounded.
+        for (const k of hits.keys()) { if (hits.size <= 40000) break; hits.delete(k); }
+      }
       return;
     }
     if (++entry.count > max) throw new HttpError(429, message);
