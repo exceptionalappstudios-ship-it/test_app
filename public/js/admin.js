@@ -644,7 +644,7 @@ function loginView(ctx, error = '') {
     if (!isTenDigits(phone)) return loginView(ctx, 'Please enter your 10-digit phone number.');
     if (!password) return loginView(ctx, 'Please enter the password.');
     try {
-      const { user: u } = await busy($('button', form), () => api('/api/auth/password', { method: 'POST', body: { phone, password } }));
+      const { user: u } = await busy($('button', form), () => api('/api/auth/password', { method: 'POST', body: { phone, password } }), { quiet: true });
       setUser(u);
       location.hash = u.profileComplete ? '#/home' : '#/setup';
     } catch (err) {

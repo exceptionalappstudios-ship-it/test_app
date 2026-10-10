@@ -76,7 +76,7 @@ function setupView(ctx) {
 }
 
 // ---- Book ----------------------------------------------------------------------------
-// Each step has its own address (#/book, #/book/details, #/book/people,
+// Each step has its own address (#/book, #/book/reference, #/book/purpose, #/book/people,
 // #/book/review) so the phone's Back button goes one step back. The answers
 // are kept in `draft` while moving between steps.
 
@@ -84,11 +84,12 @@ let draft = null;
 let bookingDays = [];
 const STEP_TITLES = {
   when: ['Book a visit', 'Pick a day'],
-  details: ['About you', 'A few quick questions'],
+  reference: ['Who referred you?', 'Pick a name, type their number'],
+  purpose: ['How many and why?', 'Almost done'],
   people: ['Who is coming?', 'Name and number of each person'],
   review: ['All correct?', 'Check and send'],
 };
-const stepList = () => ['when', 'details', ...(draft?.count > 1 ? ['people'] : []), 'review'];
+const stepList = () => ['when', 'reference', 'purpose', ...(draft?.count > 1 ? ['people'] : []), 'review'];
 const stepHash = (step) => (step === 'when' ? '#/book' : `#/book/${step}`);
 function stepHeader(step) {
   const steps = stepList();
@@ -161,43 +162,61 @@ async function bookWhenView(ctx) {
       draft.count = Math.min(draft.count, maxPeople());
       render();
     }));
-    $('[data-next]', ctx.el).addEventListener('click', () => go('details'));
+    $('[data-next]', ctx.el).addEventListener('click', () => go('reference'));
   };
   render();
 }
 
-// Step 2: photo, WhatsApp number, reference, how many people, purpose.
-function bookDetailsView(ctx, problem = '') {
+// Step 2: who referred them. The number is checked before moving on.
+function bookReferenceView(ctx, problem = '') {
   if (!draft?.session) { replaceHash('#/book'); return; }
-  stepHeader('details');
+  stepHeader('reference');
   ctx.el.innerHTML = `
-    <div class="card">
-      <div class="row">
-        ${photoTag(user.photo, user.name, 'lg')}
-        <div class="grow"><div style="font-weight:800;font-size:1.1rem">${esc(user.name)}</div>
-        <div class="small muted">Security will see this photo 📷</div>
-        <button type="button" class="btn ghost small" data-photo>${icons.camera} Change photo</button></div>
-      </div>
-    </div>
-    <div class="card">
-      <h3>${icons.whatsapp.replace('<svg', '<svg width="20" height="20" style="vertical-align:-4px;color:#0b7d3d"')} Your pass comes on WhatsApp</h3>
-      <div data-wa>
-        <div class="big-number">${esc(formatPhone(normal(draft.phone)))}</div>
-        <button type="button" class="btn ghost small" data-change-wa>${icons.edit} Change number</button>
-      </div>
-    </div>
     <form class="card" novalidate>
-      <h3 style="margin-bottom:2px">🙏 Who referred you?</h3>
-      <p class="small muted" style="margin:0">Pick a name, then type their number.</p>
-      <label for="referenceId">Name</label>
+      <div class="stamp-sm">🙏</div>
+      <label for="referenceId" style="margin-top:0">Pick a name</label>
       <select id="referenceId">
         <option value="">Choose…</option>
         ${config.references.map((r) => `<option value="${esc(r.id)}" ${r.id === draft.referenceId ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}
       </select>
       <label for="refPhone">Their phone number</label>
       ${phoneField('refPhone', draft.refPhone)}
+      <div class="hint">You can book only with the right number.</div>
     </form>
-    <form class="card" novalidate>
+    ${problemBox(problem)}
+    <div class="actions" style="margin-top:0"><button class="btn light" data-back>${icons.back} Back</button><button class="btn" data-next>Next ${icons.next}</button></div>`;
+  const keep = () => {
+    const referenceId = $('#referenceId', ctx.el).value;
+    const refPhone = $('#refPhone', ctx.el).value.trim();
+    if (referenceId !== draft.referenceId || tenDigits(refPhone) !== tenDigits(draft.refPhone)) draft.refOk = false;
+    draft.referenceId = referenceId;
+    draft.refPhone = refPhone;
+  };
+  $('[data-back]', ctx.el).addEventListener('click', () => { keep(); goBack('#/book'); });
+  $('form', ctx.el).addEventListener('submit', (e) => { e.preventDefault(); $('[data-next]', ctx.el).click(); });
+  $('[data-next]', ctx.el).addEventListener('click', async (e) => {
+    keep();
+    const msg = !draft.referenceId ? 'Please pick who referred you.' : !isTenDigits(draft.refPhone) ? 'Please type their 10-digit number.' : '';
+    if (msg) return bookReferenceView(ctx, msg);
+    if (!draft.refOk) {
+      try {
+        await busy(e.currentTarget, () => api('/api/reference/check', { method: 'POST', body: { referenceId: draft.referenceId, refPhone: tenDigits(draft.refPhone) } }), { quiet: true });
+        draft.refOk = true;
+      } catch (err) {
+        return bookReferenceView(ctx, err.message);
+      }
+    }
+    go('purpose');
+  });
+}
+
+// Step 3: how many people and why.
+function bookPurposeView(ctx, problem = '') {
+  if (!draft?.session) { replaceHash('#/book'); return; }
+  if (!draft.refOk) { replaceHash('#/book/reference'); return; }
+  stepHeader('purpose');
+  ctx.el.innerHTML = `
+    <div class="card">
       <div class="label" style="margin-top:0">👥 How many people? <span class="muted small">(with you)</span></div>
       <div class="stepper">
         <button type="button" data-dec aria-label="Fewer people">${icons.minus}</button>
@@ -206,7 +225,9 @@ function bookDetailsView(ctx, problem = '') {
         <span class="muted small">${draft.count === 1 ? 'Just me' : `You + ${plural(draft.count - 1, 'person', 'people')}`}</span>
       </div>
       <div class="hint">${maxPeople() < config.maxPeople ? `Only ${maxPeople()} places left` : `Up to ${config.maxPeople}`}</div>
-      <div class="label">🎯 Why are you coming? <span class="muted small">(pick one or more)</span></div>
+    </div>
+    <div class="card">
+      <div class="label" style="margin-top:0">🎯 Why are you coming? <span class="muted small">(pick one or more)</span></div>
       <div class="choices">
         ${Object.entries(config.purposes).map(([key, label]) => `
           <button type="button" class="choice check ${draft.purposes.includes(key) ? 'on' : ''}" data-purpose="${key}" aria-pressed="${draft.purposes.includes(key)}">
@@ -214,54 +235,27 @@ function bookDetailsView(ctx, problem = '') {
       </div>
       <label for="description">✍️ A few words ${draft.purposes.includes('other') ? '' : '<span class="muted small">(optional)</span>'}</label>
       <textarea id="description" maxlength="500" placeholder="e.g. Blessings for my daughter's wedding">${esc(draft.description)}</textarea>
-    </form>
+    </div>
     ${problemBox(problem)}
-    <div class="actions" style="margin-top:0"><button class="btn light" data-back>${icons.back} Back</button><button class="btn" data-next>Continue ${icons.next}</button></div>`;
-
-  const keep = () => {
-    const referenceId = $('#referenceId', ctx.el).value;
-    const refPhone = $('#refPhone', ctx.el).value.trim();
-    if (referenceId !== draft.referenceId || tenDigits(refPhone) !== tenDigits(draft.refPhone)) draft.refOk = false;
-    draft.referenceId = referenceId;
-    draft.refPhone = refPhone;
-    draft.description = $('#description', ctx.el).value;
-    const wa = $('#wa', ctx.el);
-    if (wa) draft.phone = wa.value.trim();
-  };
-  const again = (msg = '') => { keep(); bookDetailsView(ctx, msg); };
-  $('[data-photo]', ctx.el).addEventListener('click', () => { keep(); changePhoto(() => bookDetailsView(ctx)); });
-  $('[data-change-wa]', ctx.el).addEventListener('click', () => {
-    $('[data-wa]', ctx.el).innerHTML = `
-      <label for="wa" style="margin-top:0">WhatsApp number</label>
-      ${phoneField('wa', draft.phone)}`;
-    $('#wa', ctx.el).focus();
-  });
-  const setCount = (n) => { keep(); draft.count = Math.max(1, Math.min(maxPeople(), n)); draft.people = draft.people.slice(0, draft.count - 1); bookDetailsView(ctx); };
+    <div class="actions" style="margin-top:0"><button class="btn light" data-back>${icons.back} Back</button><button class="btn" data-next>Next ${icons.next}</button></div>`;
+  const keep = () => { draft.description = $('#description', ctx.el).value; };
+  const setCount = (n) => { keep(); draft.count = Math.max(1, Math.min(maxPeople(), n)); draft.people = draft.people.slice(0, draft.count - 1); bookPurposeView(ctx); };
   $('[data-dec]', ctx.el).addEventListener('click', () => setCount(draft.count - 1));
   $('[data-inc]', ctx.el).addEventListener('click', () => setCount(draft.count + 1));
+  // Ticking a reason only updates that button, so the page doesn't jump.
   $$('[data-purpose]', ctx.el).forEach((b) => b.addEventListener('click', () => {
     const k = b.dataset.purpose;
     draft.purposes = draft.purposes.includes(k) ? draft.purposes.filter((p) => p !== k) : [...draft.purposes, k];
-    again();
+    b.classList.toggle('on', draft.purposes.includes(k));
+    b.setAttribute('aria-pressed', draft.purposes.includes(k));
+    if (k === 'other') { keep(); bookPurposeView(ctx); }
   }));
-  $('[data-back]', ctx.el).addEventListener('click', () => { keep(); goBack('#/book'); });
-  $('[data-next]', ctx.el).addEventListener('click', async (e) => {
+  $('[data-back]', ctx.el).addEventListener('click', () => { keep(); goBack('#/book/reference'); });
+  $('[data-next]', ctx.el).addEventListener('click', () => {
     keep();
-    const msg = !isTenDigits(tenDigits(draft.phone)) ? 'Please type your 10-digit WhatsApp number.'
-      : !draft.referenceId ? 'Please pick who referred you.'
-      : !isTenDigits(draft.refPhone) ? 'Please type their 10-digit number.'
-      : !draft.purposes.length ? 'Please pick why you are coming.'
+    const msg = !draft.purposes.length ? 'Please pick why you are coming.'
       : draft.purposes.includes('other') && !draft.description.trim() ? 'Please write a few words.' : '';
-    if (msg) return again(msg);
-    // The reference's number must match before going on.
-    if (!draft.refOk) {
-      try {
-        await busy(e.currentTarget, () => api('/api/reference/check', { method: 'POST', body: { referenceId: draft.referenceId, refPhone: tenDigits(draft.refPhone) } }));
-        draft.refOk = true;
-      } catch (err) {
-        return again(err.message);
-      }
-    }
+    if (msg) return bookPurposeView(ctx, msg);
     go(draft.count > 1 ? 'people' : 'review');
   });
 }
@@ -331,9 +325,9 @@ function bookPeopleView(ctx, problem = '') {
     keep();
     draft.people.splice(Number(b.dataset.remove), 1);
     draft.count -= 1;
-    if (draft.count === 1) replaceHash('#/book/details'); else bookPeopleView(ctx);
+    if (draft.count === 1) replaceHash('#/book/purpose'); else bookPeopleView(ctx);
   }));
-  $('[data-back]', ctx.el).addEventListener('click', () => { keep(); goBack('#/book/details'); });
+  $('[data-back]', ctx.el).addEventListener('click', () => { keep(); goBack('#/book/purpose'); });
   $('[data-next]', ctx.el).addEventListener('click', async (e) => {
     keep();
     const missing = draft.people.findIndex((p) => p.name.length < 2 || !isTenDigits(p.phone));
@@ -352,30 +346,50 @@ function bookReviewView(ctx, problem = '') {
   if (!draft?.session) { replaceHash('#/book'); return; }
   stepHeader('review');
   const refName = config.references.find((r) => r.id === draft.referenceId)?.name ?? '';
+  // Each answer has a small "Change" link back to its step.
+  const change = (hash) => `<a class="change" href="${hash}">${icons.edit} Change</a>`;
+  const row = (icon, k, v, hash) => fact(icon, k, v).replace(/<\/div><\/div>$/, `</div>${change(hash)}</div>`);
   ctx.el.innerHTML = `
     <div class="card">
       <div class="hello">${photoTag(user.photo, user.name, 'lg')}<div class="grow">
         <div style="font-weight:800;font-size:1.15rem">${esc(user.name)}</div>
-        <div class="muted small">${icons.whatsapp.replace('<svg', '<svg width="14" height="14" style="vertical-align:-2px;color:#0b7d3d"')} ${esc(formatPhone(normal(draft.phone)))}</div></div></div>
-      <div class="facts" style="margin-top:10px">
-        ${fact(icons.calendar, 'Day', esc(formatDate(draft.date)))}
-        ${fact(PERIOD_ICONS[draft.session.period] ?? icons.clock, 'Time', esc(draft.session.label))}
-        ${fact(icons.users, 'People', `${esc(plural(draft.count, 'person', 'people'))}${draft.people.length ? `<div class="small muted" style="font-weight:500">${draft.people.map((p) => esc(p.name)).join(', ')}</div>` : ''}`)}
-        ${fact(icons.user, 'Referred by', esc(refName))}
-        ${fact(icons.info, 'Why', draft.purposes.map((p) => esc(config.purposes[p])).join(', '))}
-        ${draft.description.trim() ? fact(icons.edit, 'Note', esc(draft.description)) : ''}
+        <button type="button" class="btn ghost small" data-photo style="padding-left:0">${icons.camera} Change photo</button></div></div>
+      <div data-wa class="wa-box">
+        <div class="grow"><div class="k">${icons.whatsapp.replace('<svg', '<svg width="14" height="14" style="vertical-align:-2px;color:#0b7d3d"')} Pass will come to</div>
+        <div class="big-number">${esc(formatPhone(normal(draft.phone)))}</div></div>
+        <button type="button" class="change" data-change-wa>${icons.edit} Change</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="facts">
+        ${row(icons.calendar, 'Day', esc(formatDate(draft.date)), '#/book')}
+        ${row(PERIOD_ICONS[draft.session.period] ?? icons.clock, 'Time', esc(draft.session.label), '#/book')}
+        ${row(icons.user, 'Referred by', esc(refName), '#/book/reference')}
+        ${row(icons.users, 'People', `${esc(plural(draft.count, 'person', 'people'))}${draft.people.length ? `<div class="small muted" style="font-weight:500">${draft.people.map((p) => esc(p.name)).join(', ')}</div>` : ''}`, draft.count > 1 ? '#/book/people' : '#/book/purpose')}
+        ${row(icons.info, 'Why', draft.purposes.map((p) => esc(config.purposes[p])).join(', '), '#/book/purpose')}
+        ${draft.description.trim() ? row(icons.edit, 'Note', esc(draft.description), '#/book/purpose') : ''}
       </div>
     </div>
     <div class="notice info" style="margin-bottom:14px">${icons.whatsapp}<span>We will confirm on WhatsApp. <b>Your pass comes with it.</b></span></div>
     ${problemBox(problem)}
     <div class="actions" style="margin-top:0"><button class="btn light" data-back>${icons.back} Back</button><button class="btn" data-send>${icons.send} Send request</button></div>`;
-  $('[data-back]', ctx.el).addEventListener('click', () => goBack(draft.count > 1 ? '#/book/people' : '#/book/details'));
+  $('[data-photo]', ctx.el).addEventListener('click', () => changePhoto(() => bookReviewView(ctx)));
+  $('[data-change-wa]', ctx.el).addEventListener('click', () => {
+    $('[data-wa]', ctx.el).innerHTML = `<div class="grow"><label for="wa" style="margin-top:0">WhatsApp number</label>${phoneField('wa', draft.phone)}</div>`;
+    $('#wa', ctx.el).focus();
+  });
+  $('[data-back]', ctx.el).addEventListener('click', () => goBack(draft.count > 1 ? '#/book/people' : '#/book/purpose'));
   $('[data-send]', ctx.el).addEventListener('click', async (e) => {
+    const wa = $('#wa', ctx.el);
+    if (wa) {
+      if (!isTenDigits(tenDigits(wa.value))) { toast('Please type your 10-digit WhatsApp number.'); wa.focus(); return; }
+      draft.phone = tenDigits(wa.value);
+    }
     try {
       const { appointment } = await busy(e.currentTarget, () => api('/api/appointments', { method: 'POST', body: {
         sessionId: draft.session.id, phone: normal(draft.phone), referenceId: draft.referenceId, refPhone: tenDigits(draft.refPhone),
         peopleCount: draft.count, people: draft.people.map((p) => ({ name: p.name, phone: normal(p.phone) })), purposes: draft.purposes, description: draft.description,
-      } }));
+      } }), { quiet: true });
       draft = null;
       // The finished booking replaces the steps in the history, so Back doesn't reopen them.
       sessionDone = appointment;
@@ -385,6 +399,7 @@ function bookReviewView(ctx, problem = '') {
         draft.conflicts = Object.fromEntries(err.data.conflicts.map((c) => [c.phone, c.message]));
         if (draft.count > 1) replaceHash('#/book/people'); else bookReviewView(ctx, err.message);
       } else if (err.status === 409 || err.status === 400) bookReviewView(ctx, err.message);
+      else toast(err.message);
     }
   });
 }
@@ -567,9 +582,10 @@ const router = createRouter({
     { path: /^#\/login$/, view: loginView, public: true },
     { path: /^#\/setup$/, view: setupView, setup: true },
     { path: /^#\/book$/, view: bookWhenView, tab: 'book' },
-    { path: /^#\/book\/details$/, view: (ctx) => bookDetailsView(ctx), tab: 'book', back: '#/book' },
-    { path: /^#\/book\/people$/, view: (ctx) => bookPeopleView(ctx), tab: 'book', back: '#/book/details' },
-    { path: /^#\/book\/review$/, view: (ctx) => bookReviewView(ctx), tab: 'book', back: () => (draft?.count > 1 ? '#/book/people' : '#/book/details') },
+    { path: /^#\/book\/reference$/, view: (ctx) => bookReferenceView(ctx), tab: 'book', back: '#/book' },
+    { path: /^#\/book\/purpose$/, view: (ctx) => bookPurposeView(ctx), tab: 'book', back: '#/book/reference' },
+    { path: /^#\/book\/people$/, view: (ctx) => bookPeopleView(ctx), tab: 'book', back: '#/book/purpose' },
+    { path: /^#\/book\/review$/, view: (ctx) => bookReviewView(ctx), tab: 'book', back: () => (draft?.count > 1 ? '#/book/people' : '#/book/purpose') },
     { path: /^#\/book\/done$/, view: bookDoneView, tab: 'book' },
     { path: /^#\/visit$/, view: visitView, tab: 'visit' },
     { path: /^#\/updates$/, view: updatesView, tab: 'updates' },

@@ -419,3 +419,10 @@ a.note { color: inherit; text-decoration: none; transition: transform .12s; }
 a.note:active { transform: scale(.98); }
 .note .go { color: var(--muted); align-self: center; }
 .note .go svg { width: 20px; height: 20px; }
+.change { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 6px 8px; border: 0; background: none; color: var(--blue-700); font-weight: 700; font-size: .84rem; text-decoration: none; cursor: pointer; flex: 0 0 auto; border-radius: 10px; }
+.change svg { width: 15px; height: 15px; }
+.change:active { background: var(--blue-50); }
+.fact > div { min-width: 0; }
+.wa-box { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 12px 14px; border-radius: 14px; background: var(--green-50); }
+.wa-box .k { font-size: .8rem; font-weight: 700; color: var(--green-dark); }
+.stamp-sm { width: 64px; height: 64px; margin: 0 auto 6px; border-radius: 50%; background: var(--amber-50); display: grid; place-items: center; font-size: 2rem; animation: pop .34s cubic-bezier(.3, 1.4, .5, 1) both; }

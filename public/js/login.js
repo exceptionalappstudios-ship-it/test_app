@@ -26,7 +26,7 @@ export function renderLogin(el, { signupAs = 'visitor', onDone, footer = '' }) {
       const value = form.querySelector('#phone').value.trim();
       if (!isTenDigits(value)) return phoneStep('Please type your 10-digit number.');
       try {
-        const res = await busy($('button', form), () => api('/api/auth/otp/request', { method: 'POST', body: { phone: value } }));
+        const res = await busy($('button', form), () => api('/api/auth/otp/request', { method: 'POST', body: { phone: value } }), { quiet: true });
         phone = res.phone;
         codeStep(res);
       } catch (err) {
@@ -71,7 +71,7 @@ export function renderLogin(el, { signupAs = 'visitor', onDone, footer = '' }) {
       e.preventDefault();
       if (code.value.length !== 6) return;
       try {
-        const { user } = await busy($('button[type=submit]', form), () => api('/api/auth/otp/verify', { method: 'POST', body: { phone, code: code.value, signupAs } }));
+        const { user } = await busy($('button[type=submit]', form), () => api('/api/auth/otp/verify', { method: 'POST', body: { phone, code: code.value, signupAs } }), { quiet: true });
         clearInterval(timer);
         onDone(user);
       } catch (err) {

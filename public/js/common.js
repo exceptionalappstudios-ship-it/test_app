@@ -139,9 +139,11 @@ export function confirmSheet({ title, message, confirm = 'Yes', danger = false }
 }
 
 // Runs an action from a button: disables it meanwhile and shows errors.
-export async function busy(button, fn) {
+// Disables the button while `fn` runs. Errors pop up as a toast, unless the
+// screen shows them itself (`quiet`).
+export async function busy(button, fn, { quiet = false } = {}) {
   if (button) button.disabled = true;
-  try { return await fn(); } catch (err) { toast(err.message); throw err; } finally { if (button?.isConnected) button.disabled = false; }
+  try { return await fn(); } catch (err) { if (!quiet) toast(err.message); throw err; } finally { if (button?.isConnected) button.disabled = false; }
 }
 
 // Calls fn at most once per `ms`, always running the last call.

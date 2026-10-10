@@ -115,7 +115,7 @@ export function visitorRoutes({ db, notifier, config, now }) {
     if (!referenceHasPhone(ref, refPhone)) {
       wrongReference(req.user.id);
       wrongReferenceIp(req.ip);
-      throw new HttpError(400, `This number does not match ${ref.name}. Please check the number with your reference. You can book only with the right number.`);
+      throw new HttpError(400, `This number does not match ${ref.name}. Please check with them.`);
     }
     return { reference: ref.name, refPhone };
   }
