@@ -585,7 +585,7 @@ test('a database from the previous version is upgraded in place', async () => {
   old.close();
   const upgraded = openDatabase(file);
   assert.equal(upgraded.prepare('SELECT reference, express, ref_phone FROM appointments').get().reference, 'Kept');
-  assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version, 5);
+  assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version, 6);
   assert.ok(upgraded.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'reference_id'));
   assert.ok(fs.existsSync(file));
 });
@@ -640,4 +640,55 @@ test('pages send browser protections, and names lose hidden characters', async (
   const v = await visitor();
   const named = (await v('/api/auth/me', { method: 'PATCH', body: { name: 'Asha‮ Rao\u0000<b>' } })).body.user.name;
   assert.equal(named, 'Asha Rao <b>');
+});
+
+test('a visit lasts 30 minutes after check-in, then feedback opens; the daily report adds it all up', async () => {
+  const a = await admin();
+  await openSessions(a);
+  const morning = await sessionId('2030-01-10', 'morning');
+  const v = await visitor();
+  const appt = (await v('/api/appointments', { method: 'POST', body: booking(morning, { peopleCount: 3, people: [{ name: 'A', phone: '9700000001' }, { name: 'B', phone: '9700000002' }] }) })).body.appointment;
+  const v2 = await visitor('9800000002', 'Ravi Kumar');
+  const other = (await v2('/api/appointments', { method: 'POST', body: booking(morning) })).body.appointment;
+  await a(`/api/admin/appointments/${appt.id}/approve`, { method: 'POST', body: {} });
+  await a(`/api/admin/appointments/${other.id}/approve`, { method: 'POST', body: {} });
+  const s = await login('9811111111', { signupAs: 'security', name: 'Ramesh Guard' });
+  await a(`/api/admin/security/${(await a('/api/admin/security')).body.staff[0].id}/approve`, { method: 'POST' });
+
+  at(IST('2030-01-10', '09:10'));
+  await s('/api/staff/admit', { method: 'POST', body: { code: codeOf(appt.id), count: 2 } });
+  const mine = async () => (await v('/api/me')).body.appointments[0];
+  assert.equal((await mine()).visitEndsAt, new Date(IST('2030-01-10', '09:40')).toISOString());
+  assert.equal((await a('/api/admin/dashboard')).body.summary.insideNow, 2);
+  const feedback = (body) => v(`/api/me/appointments/${appt.id}/feedback`, { method: 'POST', body });
+
+  // The pass page counts down, then shows the visit is complete.
+  const token = db.prepare('SELECT pass_token FROM appointments WHERE id = ?').get(appt.id).pass_token;
+  at(IST('2030-01-10', '09:26'));
+  assert.match(await (await fetch(`${base}/p/${token}`)).text(), /14 min left/);
+  assert.equal((await feedback({ rating: 5 })).status, 409); // too early
+  assert.equal(app.locals.jobs.run(), 0);
+
+  at(IST('2030-01-10', '09:41'));
+  assert.match(await (await fetch(`${base}/p/${token}`)).text(), /Visit complete/);
+  assert.equal((await a('/api/admin/dashboard')).body.summary.insideNow, 0);
+  assert.equal(app.locals.jobs.run(), 1); // "How was your visit?" in the app only
+  assert.equal((await v('/api/me')).body.notifications[0].title, 'How was your visit? ⭐');
+  assert.equal(app.locals.jobs.run(), 0);
+  assert.equal((await feedback({ rating: 6 })).status, 400);
+  assert.equal((await feedback({ rating: 4, comment: 'Very peaceful, thank you' })).status, 200);
+  assert.equal((await feedback({ rating: 1 })).status, 409); // only once
+  assert.equal((await v2(`/api/me/appointments/${appt.id}/feedback`, { method: 'POST', body: { rating: 1 } })).status, 404); // not theirs
+
+  const fb = (await a('/api/admin/feedback')).body;
+  assert.deepEqual([fb.count, fb.average, fb.stars, fb.feedback[0].comment], [1, 4, [0, 0, 0, 1, 0], 'Very peaceful, thank you']);
+  assert.equal((await v('/api/admin/feedback')).status, 403);
+
+  const r = (await a('/api/admin/report?date=2030-01-10')).body;
+  assert.deepEqual(r.totals, { bookings: 2, peopleExpected: 4, groupsCame: 1, peopleCame: 2, noShowGroups: 1, noShowPeople: 1, express: 0, pending: 0, declined: 0, cancelled: 0 });
+  assert.deepEqual(r.sessions, [{ label: 'Morning', expected: 4, came: 2 }, { label: 'Evening', expected: 0, came: 0 }]);
+  assert.deepEqual(r.hours, [{ hour: 9, people: 2 }]);
+  assert.deepEqual(r.staff, [{ name: 'Ramesh Guard', groups: 1, people: 2 }]);
+  assert.deepEqual([r.feedback.count, r.feedback.average, r.feedback.comments[0].comment], [1, 4, 'Very peaceful, thank you']);
+  assert.equal((await s('/api/admin/report')).status, 403);
 });

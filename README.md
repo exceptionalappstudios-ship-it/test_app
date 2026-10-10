@@ -40,7 +40,12 @@ A simple, fast, mobile-first web app (installable on phones) for visits to meet 
 - **Bookings & slots**: one switch to stop or start all new bookings (with a message for visitors), open a date range
   (5 days by default from the chosen start date), close or open a
   whole day, and for each Morning / Evening set the number of slots (people) or switch it off.
-- **More**: the admin list, WhatsApp delivery log, and the scanner.
+- **Day report**: people who came vs expected, passes scanned, no-shows, sessions, arrivals by hour, who let people in,
+  feedback. **Share picture** sends a ready-made image through the phone's share sheet (WhatsApp, etc.); **Save PDF** prints it.
+- **Visit time**: after check-in a visit lasts 30 minutes ("⏱ 14 min left" for the visitor and admins; "Inside now" on the
+  dashboard). Then the pass turns grey, the visitor is asked "How was your visit?" in the app, and can give 1–5 stars and a
+  note once. **Feedback ⭐** shows the average, the spread of stars and every note.
+- **More**: day report, feedback, the admin list, WhatsApp delivery log, and the scanner.
 
 Phone numbers are always **10 digits** (the boxes accept only digits and stop at 10; pasted numbers starting with
 +91 or 0 are cleaned up). Visitors and security log in with a WhatsApp code; admins with a password. After logging in, each person sees the app for their role. Inner screens have a back arrow,

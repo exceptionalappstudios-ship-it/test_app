@@ -1,7 +1,7 @@
 import express from 'express';
 import { requireStaff } from '../auth.js';
 import { HttpError, rateLimiter } from '../http.js';
-import { APPOINTMENT_SELECT, getAppointment, viewsWithPeople, scanResult, normalizeCode } from '../appointments.js';
+import { APPOINTMENT_SELECT, getAppointment, viewsWithPeople, scanResult, normalizeCode, sqlTime, VISIT_MINUTES } from '../appointments.js';
 import { nowInTimezone, formatVisit } from '../time.js';
 
 // The scanner, used by approved security staff and by admins.
@@ -39,7 +39,7 @@ export function staffRoutes({ db, notifier, config, now }) {
   const view = (req, rows) => viewsWithPeople(db, rows).map((a) => (req.user.role === 'admin' ? a : {
     id: a.id, status: a.status, name: a.name, photo: a.photo, express: a.express,
     peopleCount: a.peopleCount, people: a.people.map((p) => ({ name: p.name })), checkedInCount: a.checkedInCount,
-    date: a.date, period: a.period, periodLabel: a.periodLabel, checkedInAt: a.checkedInAt, checkedInBy: a.checkedInBy,
+    date: a.date, period: a.period, periodLabel: a.periodLabel, checkedInAt: a.checkedInAt, checkedInBy: a.checkedInBy, visitEndsAt: a.visitEndsAt,
   }));
 
   router.get('/stream', (req, res) => notifier.openStaffStream(req, res));
@@ -59,11 +59,11 @@ export function staffRoutes({ db, notifier, config, now }) {
     if (!result.canAdmit && !override) throw new HttpError(409, result.message, { result: result.result });
     const count = parseCount(req.body?.count, appt);
     const done = db.prepare(`
-      UPDATE appointments SET checked_in_at = datetime('now'), checked_in_by = ?, checked_in_count = ?, updated_at = datetime('now')
+      UPDATE appointments SET checked_in_at = ?, checked_in_by = ?, checked_in_count = ?, updated_at = datetime('now')
       WHERE id = ? AND status = 'approved' AND checked_in_at IS NULL RETURNING id
-    `).get(req.user.id, count, appt.id);
+    `).get(sqlTime(now()), req.user.id, count, appt.id);
     if (!done) throw new HttpError(409, 'Already checked in with this QR code.', { result: 'used' });
-    notifier.notify(appt.user_id, appt.id, 'Welcome 🙏 You are checked in', 'Please take a seat.', { phone: false });
+    notifier.notify(appt.user_id, appt.id, 'Welcome 🙏 You are checked in', `Please take a seat. Your visit time is ${VISIT_MINUTES} minutes.`, { phone: false });
     notifier.emitToStaff('checkin', { id: appt.id });
     res.json({ appointment: view(req, [getAppointment(db, appt.id)])[0] });
   });

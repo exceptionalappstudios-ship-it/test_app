@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const SCHEMA = `
 PRAGMA foreign_keys = ON;
@@ -81,6 +81,10 @@ CREATE TABLE IF NOT EXISTS appointments (
   reminded_day_before INTEGER NOT NULL DEFAULT 0,
   greeted             INTEGER NOT NULL DEFAULT 0,
   pass_sent_at        TEXT,
+  feedback_rating     INTEGER CHECK (feedback_rating BETWEEN 1 AND 5),
+  feedback_comment    TEXT,
+  feedback_at         TEXT,
+  feedback_asked      INTEGER NOT NULL DEFAULT 0,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -175,6 +179,10 @@ const MIGRATIONS = [
   ['created_by', 'INTEGER REFERENCES users(id)'],
   ['pass_token', 'TEXT'],
   ['checked_in_count', 'INTEGER'],
+  ['feedback_rating', 'INTEGER'],
+  ['feedback_comment', 'TEXT'],
+  ['feedback_at', 'TEXT'],
+  ['feedback_asked', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 const USER_MIGRATIONS = [
   ['reference_id', 'TEXT'],

@@ -3,7 +3,7 @@ import { transaction, getSetting, setSetting } from '../db.js';
 import { requireAdmin, publicUser } from '../auth.js';
 import { HttpError, text, phone as parsePhone, rateLimiter } from '../http.js';
 import {
-  ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, viewsWithPeople, currentPeriod, newCheckinCode, newPassToken, passMessage, confirmMessage, passAppMessage,
+  ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, viewsWithPeople, currentPeriod, newCheckinCode, newPassToken, passMessage, confirmMessage, passAppMessage, sqlTime, parseSqlTime, VISIT_MINUTES,
 } from '../appointments.js';
 import { nowInTimezone, addDays, dayOfWeek, formatVisit, formatDay, PERIODS, DATE_RE } from '../time.js';
 import { findReference, referenceOfPhone } from '../references.js';
@@ -59,11 +59,85 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
         bookings: sum('bookings'), people: sum('people'), checkedInBookings: sum('checkedInBookings'),
         checkedInPeople: sum('checkedInPeople'), capacity: sum('capacity'),
         remainingPeople: db.prepare("SELECT COALESCE(SUM(people_count), 0) AS n FROM appointments WHERE date = ? AND status = 'approved' AND checked_in_at IS NULL").get(date).n,
+        // Checked in during the last 30 minutes (taken as still inside).
+        insideNow: db.prepare("SELECT COALESCE(SUM(COALESCE(checked_in_count, people_count)), 0) AS n FROM appointments WHERE status = 'approved' AND checked_in_at > ?")
+          .get(sqlTime(new Date(now().getTime() - VISIT_MINUTES * 60000))).n,
         ...counts,
       },
       sessions,
       recent: viewsWithPeople(db, recent),
       days,
+    });
+  });
+
+  // ---- Daily report and feedback ---------------------------------------------------
+  // Everything about one day in one answer; the admin app draws it as a
+  // shareable picture or a printable page.
+  router.get('/report', (req, res) => {
+    const date = dateParam(req.query.date, today());
+    const all = db.prepare(`${APPOINTMENT_SELECT} WHERE a.date = ?`).all(date);
+    const ok = all.filter((a) => a.status === 'approved');
+    const came = ok.filter((a) => a.checked_in_at);
+    const peopleOf = (a) => (a.checked_in_at ? (a.checked_in_count ?? a.people_count) : 0);
+    const hourOf = (a) => Number(nowInTimezone(timeZone, parseSqlTime(a.checked_in_at)).time.slice(0, 2));
+    const group = (rows, key) => {
+      const m = new Map();
+      for (const a of rows) {
+        const k = key(a);
+        if (!k) continue;
+        const g = m.get(k) ?? { name: k, groups: 0, people: 0 };
+        g.groups += 1;
+        g.people += a.checked_in_at ? peopleOf(a) : a.people_count;
+        m.set(k, g);
+      }
+      return [...m.values()].sort((x, y) => y.people - x.people);
+    };
+    const hours = new Map();
+    for (const a of came) hours.set(hourOf(a), (hours.get(hourOf(a)) ?? 0) + peopleOf(a));
+    const rated = all.filter((a) => a.feedback_rating);
+    const stars = [1, 2, 3, 4, 5].map((n) => rated.filter((a) => a.feedback_rating === n).length);
+    res.json({
+      date,
+      generatedAt: now().toISOString(),
+      totals: {
+        bookings: ok.length,
+        peopleExpected: ok.reduce((n, a) => n + a.people_count, 0),
+        groupsCame: came.length,
+        peopleCame: came.reduce((n, a) => n + peopleOf(a), 0),
+        noShowGroups: ok.length - came.length,
+        noShowPeople: ok.filter((a) => !a.checked_in_at).reduce((n, a) => n + a.people_count, 0),
+        express: ok.filter((a) => a.express).length,
+        pending: all.filter((a) => ['pending', 'hold'].includes(a.status)).length,
+        declined: all.filter((a) => a.status === 'rejected').length,
+        cancelled: all.filter((a) => a.status === 'cancelled').length,
+      },
+      sessions: PERIODS.map((p) => ({
+        label: periods[p].label,
+        expected: ok.filter((a) => a.period === p).reduce((n, a) => n + a.people_count, 0),
+        came: came.filter((a) => a.period === p).reduce((n, a) => n + peopleOf(a), 0),
+      })),
+      hours: [...hours].sort((x, y) => x[0] - y[0]).map(([hour, people]) => ({ hour, people })),
+      staff: group(came, (a) => a.checked_in_by_name),
+      references: group(ok, (a) => a.reference || null).slice(0, 6),
+      feedback: {
+        count: rated.length,
+        average: rated.length ? Math.round((rated.reduce((n, a) => n + a.feedback_rating, 0) / rated.length) * 10) / 10 : null,
+        stars,
+        comments: rated.filter((a) => a.feedback_comment).slice(0, 5).map((a) => ({ name: a.name, rating: a.feedback_rating, comment: a.feedback_comment })),
+      },
+    });
+  });
+
+  // Visitor feedback, newest first, with the average and how many of each star.
+  router.get('/feedback', (req, res) => {
+    const rows = db.prepare(`${APPOINTMENT_SELECT} WHERE a.feedback_rating IS NOT NULL ORDER BY a.feedback_at DESC LIMIT 300`).all();
+    const all = db.prepare('SELECT feedback_rating AS r, COUNT(*) AS n FROM appointments WHERE feedback_rating IS NOT NULL GROUP BY r').all();
+    const count = all.reduce((n, x) => n + x.n, 0);
+    res.json({
+      count,
+      average: count ? Math.round((all.reduce((n, x) => n + x.r * x.n, 0) / count) * 10) / 10 : null,
+      stars: [1, 2, 3, 4, 5].map((r) => all.find((x) => x.r === r)?.n ?? 0),
+      feedback: viewsWithPeople(db, rows).map((a) => ({ id: a.id, name: a.name, photo: a.photo, date: a.date, periodLabel: a.periodLabel, rating: a.feedbackRating, comment: a.feedbackComment, reference: a.reference })),
     });
   });
 

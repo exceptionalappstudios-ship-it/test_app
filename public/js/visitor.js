@@ -1,6 +1,7 @@
 import {
   $, $$, api, esc, formatDate, formatShortDate, formatPhone, formatWhen, dayParts, plural, statusChip, photoTag, contactButtons,
   toast, openSheet, confirmSheet, busy, createRouter, goBack, replaceHash, phoneField, tenDigits, isTenDigits, liveStream, homeFor, enablePush, pushSupported, registerServiceWorker, PERIOD_ICONS,
+  minutesLeft, stars,
 } from './common.js';
 import { icons } from './icons.js';
 import { renderLogin, renderProfileSetup } from './login.js';
@@ -438,12 +439,18 @@ function changePhoto(after) {
 
 // ---- My visit -----------------------------------------------------------------------
 
+let clockOffset = 0; // server time minus phone time
+let visitEnds = 0;
 async function visitView(ctx) {
   header('My pass', '');
   const render = async () => {
-    const { appointments } = await api('/api/me');
+    const { appointments, serverTime } = await api('/api/me');
     if (!ctx.isCurrent()) return;
-    const current = appointments.find((a) => a.upcoming || a.pass.state === 'ready' || (a.pass.state === 'checked_in' && a.date >= new Date().toISOString().slice(0, 10)));
+    clockOffset = new Date(serverTime) - Date.now();
+    const recent = new Date(Date.now() + clockOffset - 2 * 86400000).toISOString().slice(0, 10);
+    // The visit to show: upcoming, ready, or checked in lately (until feedback is given).
+    const current = appointments.find((a) => a.upcoming || a.pass.state === 'ready'
+      || (a.pass.state === 'checked_in' && a.date >= recent && (!a.feedbackRating || a.date >= new Date(Date.now() + clockOffset).toISOString().slice(0, 10))));
     const past = appointments.filter((a) => a !== current);
     const when = (a) => `<div class="chips-row">
       <span class="pill">${icons.calendar} ${esc(formatShortDate(a.date))}</span>
@@ -451,6 +458,7 @@ async function visitView(ctx) {
       <span class="pill">${icons.users} ${esc(String(a.peopleCount))}</span></div>`;
     // The pass: one colour per state, big and simple.
     let ticket = '';
+    visitEnds = current?.visitEndsAt ? new Date(current.visitEndsAt) : 0;
     if (current) {
       const p = current.pass;
       if (p.state === 'ready') {
@@ -466,9 +474,21 @@ async function visitView(ctx) {
             ${when(current)}
             <p class="small muted" style="margin:12px 0 0">✓ Any time that day &nbsp;·&nbsp; ✓ One scan only</p>
           </div></div>` : '';
-      } else if (p.state === 'checked_in') {
+      } else if (p.state === 'checked_in' && minutesLeft(current, clockOffset) > 0) {
         ticket = `<div class="ticket"><div class="band done">${icons.checkCircle} Checked in</div><div class="body">
-          <div class="stamp go">${icons.check}</div><h2>Welcome 🙏</h2><p class="sub">Please take a seat.</p></div></div>`;
+          <div class="stamp go">${icons.check}</div><h2>Welcome 🙏</h2>
+          <div class="time-left"><span data-left>${minutesLeft(current, clockOffset)}</span> min left</div>
+          <p class="small muted" style="margin:10px 0 0">Your visit time is 30 minutes</p></div></div>`;
+      } else if (p.state === 'checked_in') {
+        ticket = `<div class="ticket used"><div class="band off">${icons.checkCircle} Visit complete</div><div class="body">
+          <div class="who" style="margin-top:0">${esc(current.name)}</div>${when(current)}
+          ${current.feedbackRating ? `<div class="thanks"><div>${stars(current.feedbackRating, 30)}</div><p class="sub" style="margin:6px 0 0">Thank you for your feedback 🙏</p></div>`
+            : `<div class="rate" data-rate>
+              <h2 style="margin-top:14px">How was your visit?</h2>
+              <div class="star-pick" role="radiogroup" aria-label="Rating">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-star="${n}" role="radio" aria-checked="false" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('')}</div>
+              <textarea data-comment maxlength="500" placeholder="Anything to share? (optional)" hidden></textarea>
+              <button class="btn block" data-send-rating hidden>${icons.send} Send</button></div>`}
+        </div></div>`;
       } else if (['pending', 'hold'].includes(current.status)) {
         ticket = `<div class="ticket"><div class="band wait">${icons.clock} Waiting for confirmation</div><div class="body">
           <div class="stamp wait">${icons.clock}</div><div class="who" style="margin-top:0">${esc(current.name)}</div>${when(current)}
@@ -493,6 +513,22 @@ async function visitView(ctx) {
       ctx.el.insertAdjacentHTML('beforeend', `<div class="section-title">Earlier</div><div class="card flush">${past.map((a) => `
         <div class="person"><div class="grow"><div class="name">${esc(formatShortDate(a.date))} · ${esc(a.periodLabel)}</div><div class="meta">${esc(plural(a.peopleCount, 'person', 'people'))}</div></div>${statusChip(a.status, a.checkedInAt)}</div>`).join('')}</div>`);
     }
+    // Stars: tap one, then send (a note is optional).
+    const rate = $('[data-rate]', ctx.el);
+    if (rate) {
+      let rating = 0;
+      $$('[data-star]', rate).forEach((b) => b.addEventListener('click', () => {
+        rating = Number(b.dataset.star);
+        $$('[data-star]', rate).forEach((x) => { x.classList.toggle('on', Number(x.dataset.star) <= rating); x.setAttribute('aria-checked', String(x === b)); });
+        $('[data-comment]', rate).hidden = false;
+        $('[data-send-rating]', rate).hidden = false;
+      }));
+      $('[data-send-rating]', rate).addEventListener('click', async (e) => {
+        await busy(e.currentTarget, () => api(`/api/me/appointments/${current.id}/feedback`, { method: 'POST', body: { rating, comment: $('[data-comment]', rate).value } }));
+        toast('Thank you 🙏');
+        render();
+      });
+    }
     $('[data-cancel]', ctx.el)?.addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       if (!await confirmSheet({ title: 'Cancel your visit?', message: 'Your place will go to someone else.', confirm: 'Yes, cancel', danger: true })) return;
@@ -503,8 +539,15 @@ async function visitView(ctx) {
   };
   await render();
   onUpdate(ctx, render);
-  const timer = setInterval(render, 60000);
-  ctx.onCleanup(() => clearInterval(timer));
+  // The countdown ticks on its own; the screen refreshes when the visit ends.
+  const tick = setInterval(() => {
+    const el = $('[data-left]', ctx.el);
+    if (!el) return;
+    const left = Math.max(0, Math.ceil((visitEnds - (Date.now() + clockOffset)) / 60000));
+    if (left <= 0) render(); else el.textContent = left;
+  }, 15000);
+  const timer = setInterval(() => { if (!$('[data-rate] textarea:not([hidden])', ctx.el)) render(); }, 60000);
+  ctx.onCleanup(() => { clearInterval(timer); clearInterval(tick); });
 }
 
 // ---- Updates ---------------------------------------------------------------------------
@@ -514,6 +557,7 @@ function noteStyle(title) {
   const t = title.toLowerCase();
   if (/declined|cancel|removed|not approved|sorry/.test(t)) return ['red', icons.xCircle];
   if (/confirmed|approved|pass|checked in|welcome/.test(t)) return ['green', /pass/.test(t) ? icons.ticket : icons.checkCircle];
+  if (/how was|rate/.test(t)) return ['amber', '<span style="font-size:20px;line-height:1">⭐</span>'];
   if (/today|tomorrow|reminder/.test(t)) return ['amber', icons.sun];
   return ['blue', icons.bell];
 }

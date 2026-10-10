@@ -1,5 +1,5 @@
 import { nowInTimezone, addDays, formatVisit, formatDay, PERIOD_LABELS } from './time.js';
-import { ensurePass, passMessage, passAppMessage } from './appointments.js';
+import { ensurePass, passMessage, passAppMessage, sqlTime, VISIT_MINUTES } from './appointments.js';
 
 // Scheduled WhatsApp + in-app messages for confirmed visits:
 //   - the day before (at REMINDER_TIME): "your visit is tomorrow"
@@ -46,6 +46,16 @@ export function createJobs({ db, notifier, config, now = () => new Date() }) {
       const a = ensurePass(db, row);
       markPass.run(a.id);
       notifier.sendPass(a, 'Your pass 🎟️', passMessage(a, `today (${formatDay(today)}, ${PERIOD_LABELS[a.period]})`), passAppMessage(a, `Today (${PERIOD_LABELS[a.period]})`));
+      sent++;
+    }
+    // When the visit time is over, ask for feedback in the app (no WhatsApp cost).
+    const ended = sqlTime(new Date(now().getTime() - VISIT_MINUTES * 60000));
+    const done = db.prepare(`SELECT * FROM appointments WHERE status = 'approved' AND checked_in_at IS NOT NULL AND checked_in_at <= ?
+      AND feedback_asked = 0 AND feedback_rating IS NULL AND date >= ?`).all(ended, addDays(today, -1));
+    const markAsked = db.prepare('UPDATE appointments SET feedback_asked = 1 WHERE id = ?');
+    for (const a of done) {
+      markAsked.run(a.id);
+      notifier.notify(a.user_id, a.id, 'How was your visit? ⭐', 'Tap to give stars. It takes 5 seconds 🙏', { phone: false });
       sent++;
     }
     return sent;

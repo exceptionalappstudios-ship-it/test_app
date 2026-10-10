@@ -1,6 +1,14 @@
 import { nowInTimezone, formatVisit, PERIODS, PERIOD_LABELS } from './time.js';
 
 export const MAX_PEOPLE = 5;
+// After check-in a visit is taken to last this long; then the pass is
+// greyed out and the visitor is asked for feedback.
+export const VISIT_MINUTES = 30;
+
+// Times are stored as UTC "YYYY-MM-DD HH:MM:SS" (SQLite style).
+export const sqlTime = (date) => date.toISOString().slice(0, 19).replace('T', ' ');
+export const parseSqlTime = (t) => (t ? new Date(`${t.replace(' ', 'T')}Z`) : null);
+export const visitEndsAt = (a) => (a.checked_in_at ? new Date(parseSqlTime(a.checked_in_at).getTime() + VISIT_MINUTES * 60000) : null);
 
 // Entry codes are 6 letters/digits without look-alikes (no 0/O, 1/I/L), so
 // security can type them easily. The QR code contains the same 6 characters.
@@ -78,6 +86,8 @@ export function appointmentView(a, people = []) {
     adminNote: a.admin_note, reviewedBy: a.reviewed_by_name ?? null,
     checkedInAt: a.checked_in_at, checkedInBy: a.checked_in_by_name ?? null,
     passSent: Boolean(a.pass_sent_at), createdAt: a.created_at,
+    visitEndsAt: visitEndsAt(a)?.toISOString() ?? null,
+    feedbackRating: a.feedback_rating ?? null, feedbackComment: a.feedback_comment ?? null,
   };
 }
 

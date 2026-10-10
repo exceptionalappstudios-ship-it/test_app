@@ -75,6 +75,16 @@ export function photoTag(src, name, cls = '') {
   return `<img class="photo ${cls}" src="${esc(src)}" alt="" loading="lazy" decoding="async">`;
 }
 
+// Minutes left of a checked-in visit (30 minutes from check-in). `offset`
+// corrects for a phone clock that is off (server time minus phone time).
+export const minutesLeft = (a, offset = 0) => (a?.visitEndsAt ? Math.max(0, Math.ceil((new Date(a.visitEndsAt) - (Date.now() + offset)) / 60000)) : 0);
+export function visitTimer(a, offset = 0) {
+  if (!a?.checkedInAt || !a.visitEndsAt) return '';
+  const left = minutesLeft(a, offset);
+  return left > 0 ? `<span class="status inside">⏱ ${left} min left</span>` : '<span class="status left">✓ Visit done</span>';
+}
+export const stars = (n, size = 16) => Array.from({ length: 5 }, (_, i) => `<span class="star ${i < n ? 'on' : ''}" style="font-size:${size}px">★</span>`).join('');
+
 // One-tap call and WhatsApp buttons for a number.
 export function contactButtons(phone) {
   const digits = String(phone ?? '').replace(/\D/g, '');

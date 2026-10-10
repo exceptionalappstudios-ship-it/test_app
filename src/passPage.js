@@ -8,7 +8,7 @@
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-export function renderPassPage({ state, name, visit, people, code, qrSvg, validText = 'Valid today', opensText, checkedInTime, express }) {
+export function renderPassPage({ state, name, visit, people, code, qrSvg, validText = 'Valid today', opensText, checkedInTime, minutesLeft = 0, express }) {
   // One colour per state, an icon and a few words.
   const tick = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
   const cross = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
@@ -20,7 +20,9 @@ export function renderPassPage({ state, name, visit, people, code, qrSvg, validT
       <div class="live"><span class="dot"></span><span id="clock">Live</span></div>
       <p class="note">Show at the gate &nbsp;·&nbsp; One scan only</p>` }),
     not_yet: () => ({ band: 'soon', head: `${tick} Confirmed`, body: `<p class="big">Your pass opens on<br><strong>${esc(opensText)}</strong></p>` }),
-    checked_in: () => ({ band: 'go', head: `${tick} Checked in`, body: `<div class="stamp">🙏</div><p class="big">Welcome!${checkedInTime ? `<br><span class="soft">${esc(checkedInTime)}</span>` : ''}</p>` }),
+    checked_in: () => (minutesLeft > 0
+      ? { band: 'go', head: `${tick} Checked in`, body: `<div class="stamp">🙏</div><p class="big">Welcome!</p><p class="left">⏱ ${esc(minutesLeft)} min left</p>${checkedInTime ? `<p class="soft">In at ${esc(checkedInTime)}</p>` : ''}` }
+      : { band: 'off', head: `${tick} Visit complete`, body: '<div class="stamp">🙏</div><p class="big">Thank you for coming</p><p class="soft">Rate your visit in the app ⭐</p>' }),
     expired: () => ({ band: 'off', head: 'Pass ended', body: '<p class="big">This pass was for an earlier day.</p>' }),
     inactive: () => ({ band: 'bad', head: `${cross} Not valid`, body: '<p class="big">This visit is not confirmed.</p>' }),
     missing: () => ({ band: 'bad', head: `${cross} Pass not found`, body: '<p class="big">Please open the link from WhatsApp again.</p>' }),
@@ -29,7 +31,7 @@ export function renderPassPage({ state, name, visit, people, code, qrSvg, validT
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex"><meta name="referrer" content="no-referrer">
-${state === 'not_yet' ? '<meta http-equiv="refresh" content="60">' : ''}
+${state === 'not_yet' || (state === 'checked_in' && minutesLeft > 0) ? '<meta http-equiv="refresh" content="60">' : ''}
 <title>Entry pass · Meet Gurudev</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0}
@@ -50,7 +52,8 @@ h1{font-size:.78rem;margin:0;color:#7b8aa3;font-weight:800;letter-spacing:.12em}
 .code{font:800 2.2rem/1.1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.18em;margin-top:2px}
 .live{display:inline-flex;align-items:center;gap:8px;margin-top:12px;font-weight:700;font-variant-numeric:tabular-nums;color:#0b7d3d}
 .dot{width:10px;height:10px;border-radius:50%;background:#1fbf63;animation:pulse 1s infinite alternate}
-.big{font-size:1.15rem;margin:8px 0 2px;font-weight:600}.soft{font-size:.9rem;color:#7b8aa3;font-weight:500}
+.big{font-size:1.15rem;margin:8px 0 2px;font-weight:600}.soft{font-size:.9rem;color:#7b8aa3;font-weight:500;margin:6px 0 0}
+.left{display:inline-block;margin:10px 0 0;padding:6px 14px;border-radius:999px;background:#e3f7eb;color:#0b7d3d;font-weight:800}
 .stamp{font-size:3rem;line-height:1;margin:6px 0;animation:pop .4s cubic-bezier(.3,1.4,.5,1) both}
 .note{font-size:.88rem;color:#4a5b78;margin:12px 0 0;font-weight:600}
 .hidden-cover{position:absolute;inset:0;background:#fff;display:none;align-items:center;justify-content:center;font-weight:700;color:#4a5b78;padding:20px}

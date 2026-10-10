@@ -12,7 +12,7 @@ import { HttpError } from './http.js';
 import { parsePeriodTimes, formatDay, formatVisit } from './time.js';
 import QRCode from 'qrcode';
 import { renderPassPage } from './passPage.js';
-import { passState } from './appointments.js';
+import { passState, visitEndsAt } from './appointments.js';
 import { authRoutes, photoRoutes } from './routes/auth.js';
 import { visitorRoutes } from './routes/visitor.js';
 import { staffRoutes } from './routes/staff.js';
@@ -121,6 +121,7 @@ export function createApp({ db, config: overrides = {}, now = () => new Date() }
       qrSvg: pass.state === 'ready' ? await QRCode.toString(a.checkin_code, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) : '',
       validText: pass.today ? 'Valid today' : `Valid on ${formatDay(a.date)}`,
       checkedInTime: a.checked_in_at ? new Date(a.checked_in_at.replace(' ', 'T') + 'Z').toLocaleTimeString('en-IN', { timeZone: config.timeZone, hour: 'numeric', minute: '2-digit' }) : '',
+      minutesLeft: a.checked_in_at ? Math.max(0, Math.ceil((visitEndsAt(a) - now()) / 60000)) : 0,
     }));
   });
 

@@ -1,7 +1,9 @@
 import {
   $, $$, api, esc, formatDate, formatShortDate, formatPhone, formatTime, formatWhen, addDays, plural, statusChip, photoTag,
   contactButtons, toast, openSheet, confirmSheet, busy, throttle, createRouter, goBack, liveStream, homeFor, wrongAccount, PERIOD_ICONS, phoneField, isTenDigits,
+  visitTimer, stars,
 } from './common.js';
+import { reportHtml, shareReport } from './report.js';
 import { icons } from './icons.js';
 import { renderProfileSetup } from './login.js';
 import { photoPicker } from './photo.js';
@@ -55,7 +57,9 @@ async function refreshBadges() {
 function onChanged(ctx, fn) {
   const handler = () => { if (ctx.isCurrent() && !document.activeElement?.matches('input, textarea')) fn(); };
   window.addEventListener('admin:changed', handler);
-  ctx.onCleanup(() => window.removeEventListener('admin:changed', handler));
+  // Also once a minute, so "min left" timers and "Inside now" stay current.
+  const timer = setInterval(handler, 60000);
+  ctx.onCleanup(() => { window.removeEventListener('admin:changed', handler); clearInterval(timer); });
 }
 
 // Prev / date / next control shown in the header.
@@ -80,7 +84,7 @@ function apptDetails(a) {
     <div class="row">${photoTag(a.photo, a.name, 'lg')}<div class="grow">
       <div style="font-weight:800;font-size:1.1rem">${esc(a.name)}</div>
       <div class="small muted">${esc(formatPhone(a.phone))}</div>
-      <div style="margin-top:6px" class="chips">${statusChip(a.status, a.checkedInAt)}${a.express ? '<span class="status express">⚡ Express</span>' : ''}</div></div>
+      <div style="margin-top:6px" class="chips">${statusChip(a.status, a.checkedInAt)}${visitTimer(a)}${a.express ? '<span class="status express">⚡ Express</span>' : ''}</div></div>
       <div class="contact" style="display:flex;flex-direction:column;gap:8px">${contactButtons(a.phone)}</div></div>
     <dl class="details">
       <dt>Day</dt><dd><strong>${esc(formatShortDate(a.date))} · ${esc(a.periodLabel)}</strong></dd>
@@ -94,6 +98,7 @@ function apptDetails(a) {
       ${a.description ? `<dt>Details</dt><dd>${esc(a.description)}</dd>` : ''}
       ${a.adminNote ? `<dt>Note</dt><dd>${esc(a.adminNote)}</dd>` : ''}
       ${a.checkedInAt ? `<dt>Checked in</dt><dd><strong>${esc(formatTime(a.checkedInAt))}</strong>${a.checkedInBy ? ` by ${esc(a.checkedInBy)}` : ''}<br>${esc(`${a.checkedInCount} of ${plural(a.peopleCount, 'person', 'people')} came`)}</dd>` : ''}
+      ${a.feedbackRating ? `<dt>Feedback</dt><dd>${stars(a.feedbackRating, 18)}${a.feedbackComment ? `<br>“${esc(a.feedbackComment)}”` : ''}</dd>` : ''}
       ${a.reviewedBy && !['pending'].includes(a.status) ? `<dt>Reviewed by</dt><dd>${esc(a.reviewedBy)}</dd>` : ''}
       <dt>Requested</dt><dd>${esc(formatWhen(a.createdAt))}</dd>
     </dl>`;
@@ -188,9 +193,9 @@ async function homeView(ctx) {
         <div class="kpi main">${ring}<div><div class="l">People checked in</div><div class="v">${s.checkedInPeople}<span class="muted" style="font-size:1.1rem;font-weight:700"> / ${s.people}</span></div></div></div>
         <div class="kpi"><div class="l">Yet to arrive</div><div class="v">${s.remainingPeople}</div></div>
         <div class="kpi"><div class="l">Bookings</div><div class="v">${s.bookings}</div></div>
-        <div class="kpi"><div class="l">Checked in</div><div class="v">${s.checkedInBookings}</div></div>
+        <div class="kpi inside"><div class="l">Inside now</div><div class="v">${s.insideNow}</div></div>
       </div>
-      <div class="actions" style="margin-top:14px"><a class="btn blue" href="#/express">⚡ Express pass</a><a class="btn light" href="#/sessions">${icons.calendar} Bookings &amp; slots</a></div>
+      <div class="actions" style="margin-top:14px"><a class="btn blue" href="#/express">⚡ Express pass</a><a class="btn light" href="#/report">📊 Day report</a><a class="btn light" href="#/sessions">${icons.calendar} Slots</a></div>
       <div style="margin-top:14px">
         ${s.pending ? `<a class="alert-link" href="#/requests"><span class="count">${s.pending}</span>New requests to review${icons.next}</a>` : ''}
         ${s.hold ? `<a class="alert-link" href="#/requests?hold"><span class="count violet">${s.hold}</span>Requests on hold${icons.next}</a>` : ''}
@@ -289,7 +294,7 @@ async function visitorsView(ctx) {
         ${photoTag(a.photo, a.name)}
         <div class="grow"><div class="name">${esc(a.name)}${a.express ? ' <span class="status express" style="font-size:.7rem;padding:2px 7px">⚡ Express</span>' : ''}</div>
           <div class="meta">${esc(a.periodLabel)} · ${a.checkedInAt && a.checkedInCount !== a.peopleCount ? `${a.checkedInCount} of ${a.peopleCount} came` : esc(plural(a.peopleCount, 'person', 'people'))}${a.checkedInAt ? ` · in at ${esc(formatTime(a.checkedInAt))}${a.checkedInBy ? ` by ${esc(a.checkedInBy)}` : ''}` : ''}</div>
-          <div style="margin-top:4px">${statusChip(a.status, a.checkedInAt)}</div></div>
+          <div style="margin-top:4px" class="chips">${statusChip(a.status, a.checkedInAt)}${visitTimer(a)}${a.feedbackRating ? `<span class="status left">${stars(a.feedbackRating, 12)}</span>` : ''}</div></div>
         <div class="contact">${contactButtons(a.phone)}</div>
       </div>`).join('') : '<div class="empty">No visitors match.</div>';
     list.onclick = (e) => {
@@ -365,6 +370,8 @@ function moreView(ctx) {
   ctx.el.innerHTML = `
     <div class="card row">${photoTag(user.photo, user.name, 'lg')}<div class="grow"><div style="font-weight:800;font-size:1.1rem">${esc(user.name)}</div><div class="muted small">${esc(formatPhone(user.phone))} · Admin</div></div></div>
     <div class="card flush">
+      ${link('#/report', icons.list, 'Day report', 'People who came, scans, feedback · share or save')}
+      ${link('#/feedback', icons.message, 'Feedback ⭐', 'Stars and notes from visitors')}
       ${link('#/sessions', icons.calendar, 'Bookings & slots', 'Open or close bookings, open days, set slots')}
       ${link('#/express', icons.ticket, 'Express pass', 'Let someone in today with just a name and number')}
       ${link('/security.html#/scan', icons.scan, 'Scan passes', 'Open the scanner')}
@@ -533,6 +540,46 @@ async function adminsView(ctx) {
     <div class="card flush">${admins.map((a) => `<div class="person">${photoTag(a.photo, a.name)}<div class="grow"><div class="name">${esc(a.name ?? '')}${a.id === user.id ? ' (you)' : ''}</div><div class="meta">${esc(formatPhone(a.phone))}</div></div></div>`).join('')}</div>`;
 }
 
+// ---- Day report and feedback -------------------------------------------------------
+
+let reportDate = null;
+async function reportView(ctx) {
+  await ensureToday();
+  reportDate ??= today;
+  header('Day report', 'Share it or save it as PDF');
+  dayNav(reportDate, (d) => { reportDate = d; reportView(ctx); });
+  const r = await api(`/api/admin/report?date=${reportDate}`);
+  if (!ctx.isCurrent()) return;
+  ctx.el.innerHTML = `
+    <div class="actions report-actions" style="margin:0 0 14px">
+      <button class="btn" data-share>${icons.send} Share picture</button>
+      <button class="btn light" data-print>${icons.list} Save PDF</button>
+    </div>
+    ${reportHtml(r)}`;
+  $('[data-share]', ctx.el).addEventListener('click', async (e) => {
+    const how = await busy(e.currentTarget, () => shareReport(r));
+    if (how === 'downloaded') toast('Picture saved ✓');
+  });
+  $('[data-print]', ctx.el).addEventListener('click', () => window.print());
+}
+
+async function feedbackView(ctx) {
+  header('Feedback ⭐', 'What visitors said');
+  const f = await api('/api/admin/feedback');
+  if (!ctx.isCurrent()) return;
+  const max = Math.max(1, ...f.stars);
+  ctx.el.innerHTML = f.count ? `
+    <div class="card"><div class="row" style="gap:18px;align-items:center">
+      <div class="center"><div class="big-rating">${f.average}</div><div>${stars(Math.round(f.average), 20)}</div><div class="small muted">${plural(f.count, 'rating')}</div></div>
+      <div class="grow">${[5, 4, 3, 2, 1].map((n) => `<div class="star-row"><span>${n}★</span><div class="meter amber"><span style="width:${Math.round((f.stars[n - 1] / max) * 100)}%"></span></div><span class="n">${f.stars[n - 1]}</span></div>`).join('')}</div>
+    </div></div>
+    <div class="card flush">${f.feedback.map((x) => `<div class="person" style="align-items:flex-start">${photoTag(x.photo, x.name)}
+      <div class="grow"><div class="row" style="justify-content:space-between"><span class="name">${esc(x.name)}</span><span>${stars(x.rating, 14)}</span></div>
+      ${x.comment ? `<div style="margin-top:4px">“${esc(x.comment)}”</div>` : ''}
+      <div class="meta">${esc(formatShortDate(x.date))} · ${esc(x.periodLabel)}${x.reference ? ` · Ref: ${esc(x.reference)}` : ''}</div></div></div>`).join('')}</div>`
+    : '<div class="card center"><div class="big-icon wait">⭐</div><h2>No feedback yet</h2><p class="sub">Visitors can rate their visit 30 minutes after check-in.</p></div>';
+}
+
 async function outboxView(ctx) {
   header('WhatsApp delivery', 'The latest messages sent by the app.');
   const { messages } = await api('/api/admin/outbox');
@@ -675,6 +722,8 @@ const router = createRouter({
     { path: /^#\/sessions$/, view: sessionsView, tab: 'more', back: '#/more' },
     { path: /^#\/admins$/, view: adminsView, tab: 'more', back: '#/more' },
     { path: /^#\/outbox$/, view: outboxView, tab: 'more', back: '#/more' },
+    { path: /^#\/report$/, view: reportView, tab: 'home', back: '#/home' },
+    { path: /^#\/feedback$/, view: feedbackView, tab: 'more', back: '#/more' },
   ],
   guard: (route) => {
     if (!user) return route.public ? null : '#/login';

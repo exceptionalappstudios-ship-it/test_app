@@ -5,7 +5,7 @@ import { requireUser, requireProfile } from '../auth.js';
 import { HttpError, text, phone as parsePhone, normalizePhone, rateLimiter } from '../http.js';
 import { findReference, referenceHasPhone } from '../references.js';
 import {
-  ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, appointmentView, viewsWithPeople, passState,
+  ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, appointmentView, viewsWithPeople, passState, visitEndsAt, sqlTime,
 } from '../appointments.js';
 import { nowInTimezone, minutesUntil, addDays, formatVisit, formatClock, PERIODS, DATE_RE } from '../time.js';
 
@@ -189,7 +189,8 @@ export function visitorRoutes({ db, notifier, config, now }) {
       ...a, pass: passState(rows[i], passOpts()), upcoming: ['pending', 'hold', 'approved'].includes(a.status) && a.date >= today(),
     }));
     const notifications = db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 50').all(req.user.id);
-    res.json({ appointments, notifications, unread: notifications.filter((n) => !n.read_at).length });
+    // The server's clock, so the phone can count down the visit time correctly.
+    res.json({ appointments, notifications, unread: notifications.filter((n) => !n.read_at).length, serverTime: now().toISOString() });
   });
 
   router.post('/me/notifications/read', requireUser, (req, res) => {
@@ -209,6 +210,22 @@ export function visitorRoutes({ db, notifier, config, now }) {
     db.prepare("UPDATE appointments SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?").run(appt.id);
     notifier.notify(req.user.id, appt.id, 'Visit cancelled', `${formatVisit(appt)} is cancelled.`, { phone: false });
     notifier.emitToStaff('appointment', { id: appt.id });
+    res.json({ appointment: viewsWithPeople(db, [getAppointment(db, appt.id)])[0] });
+  });
+
+  // After the visit (30 minutes from check-in), one star rating and a note.
+  router.post('/me/appointments/:id/feedback', requireUser, (req, res) => {
+    const appt = own(req);
+    const ends = visitEndsAt(appt);
+    if (!ends) throw new HttpError(409, 'You can share feedback after your visit.');
+    if (now() < ends) throw new HttpError(409, 'You can share feedback after your visit.');
+    if (appt.feedback_rating) throw new HttpError(409, 'Thank you, we already have your feedback.');
+    const rating = Number(req.body?.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw new HttpError(400, 'Please tap 1 to 5 stars');
+    const comment = text(req.body?.comment, 'your note', 500, { required: false }) || null;
+    db.prepare('UPDATE appointments SET feedback_rating = ?, feedback_comment = ?, feedback_at = ? WHERE id = ? AND feedback_rating IS NULL')
+      .run(rating, comment, sqlTime(now()), appt.id);
+    notifier.emitToStaff('feedback', { id: appt.id });
     res.json({ appointment: viewsWithPeople(db, [getAppointment(db, appt.id)])[0] });
   });
 
