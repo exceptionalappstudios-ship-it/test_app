@@ -20,14 +20,27 @@ const config = {
   greetingTime: env.GREETING_TIME || '07:00',
   vapidSubject: env.VAPID_SUBJECT || 'mailto:admin@example.com',
   contact: { phone: env.CONTACT_PHONE || null, whatsapp: env.CONTACT_WHATSAPP || null, address: env.CONTACT_ADDRESS || null },
-  whatsapp: env.WHATSAPP_TOKEN ? {
+  // WhatsApp settings come only from the host's private variables, never from
+  // the code. WHATSAPP_VENDOR_UID set means the mart2meta provider.
+  whatsapp: env.WHATSAPP_TOKEN ? (env.WHATSAPP_VENDOR_UID || env.WHATSAPP_PROVIDER === 'mart2meta' ? {
+    provider: 'mart2meta',
+    token: env.WHATSAPP_TOKEN,
+    phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID,
+    vendorUid: env.WHATSAPP_VENDOR_UID,
+    baseUrl: (env.WHATSAPP_API_URL || 'https://login.mart2meta.com/api').replace(/\/$/, ''),
+    otpTemplate: env.WHATSAPP_OTP_TEMPLATE || 'appointment_test_ashram',
+    template: env.WHATSAPP_TEMPLATE || null,
+    passTemplate: env.WHATSAPP_PASS_TEMPLATE || null,
+    language: env.WHATSAPP_TEMPLATE_LANG || 'en',
+  } : {
+    provider: 'meta',
     token: env.WHATSAPP_TOKEN,
     phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID,
     otpTemplate: env.WHATSAPP_OTP_TEMPLATE || 'login_code',
     template: env.WHATSAPP_TEMPLATE || 'appointment_update',
     passTemplate: env.WHATSAPP_PASS_TEMPLATE || 'entry_pass',
     language: env.WHATSAPP_TEMPLATE_LANG || 'en',
-  } : null,
+  }) : null,
   photosDir: path.join(dataDir, 'photos'),
   // Until WhatsApp is connected, login codes are shown on screen (never for
   // admins, who use the password). SHOW_OTP_ON_SCREEN=0 turns this off.

@@ -1,4 +1,4 @@
-import { $, api, esc, formatTime, formatPhone, plural, photoTag, openSheet, toast, busy, createRouter, liveStream, homeFor, wrongAccount, throttle } from './common.js';
+import { $, api, esc, formatTime, formatPhone, plural, photoTag, openSheet, toast, busy, createRouter, liveStream, homeFor, wrongAccount, throttle, askForAlerts, registerServiceWorker } from './common.js';
 import { icons } from './icons.js';
 import { renderLogin, renderProfileSetup } from './login.js';
 import { startScanner } from './scanner.js';
@@ -23,6 +23,7 @@ function setUser(u) {
   if (ready) {
     // Approval or removal by an admin takes effect immediately.
     stopStream = liveStream('/api/me/stream', { status: () => location.reload(), notification: (n) => toast(n.title) });
+    askForAlerts(config.vapidPublicKey, u.status === 'pending' ? 'Know at once when you are approved.' : 'Get updates from the admin on this phone.');
   }
 }
 
@@ -125,6 +126,7 @@ const router = createRouter({
   },
 });
 
+registerServiceWorker();
 [config, { user }] = await Promise.all([api('/api/config'), api('/api/auth/me')]);
 if (user?.role === 'visitor') { header('Security staff'); wrongAccount(outlet, user, 'security staff'); }
 else { setUser(user); router.run(); }

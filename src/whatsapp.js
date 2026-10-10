@@ -1,4 +1,5 @@
-// WhatsApp delivery through the Meta WhatsApp Cloud API.
+// WhatsApp delivery, either through Meta's WhatsApp Cloud API directly or
+// through mart2meta (a WhatsApp Business provider), chosen by settings.
 //
 // Every message goes into the outbound_messages table first and is sent by a
 // background worker with a few in parallel, so a burst (1,000 passes at 8 AM)
@@ -10,6 +11,8 @@
 //   update - Utility template, body "{{1}}\n\n{{2}}" (title, message)
 //   pass   - Utility template, body "{{1}}\n\n{{2}}" and a "View pass" URL button
 //            pointing to <APP_URL>/p/{{1}} (the secret pass link)
+// With mart2meta, a kind of message is sent only when its template is set;
+// the others stay in the app (shown as "not sent" in the delivery log).
 export function createWhatsApp(db, config) {
   const wa = config.whatsapp;
   const fetchFn = config.fetch ?? fetch;
@@ -40,14 +43,42 @@ export function createWhatsApp(db, config) {
   const clean = (s) => String(s).replace(/\s*\n+\s*/g, ' · ').replace(/\s{2,}/g, ' ').trim().slice(0, 1000);
   const param = (s) => ({ type: 'text', text: clean(s) });
 
-  async function post(path, body) {
-    const res = await fetchFn(graph(path), {
+  const mart2meta = wa?.provider === 'mart2meta';
+  const templateFor = { otp: wa?.otpTemplate, pass: wa?.passTemplate, update: wa?.template };
+  // Which kinds of message go out on WhatsApp.
+  const sends = (kind) => Boolean(wa?.token && (!mart2meta || templateFor[kind === 'pass' || kind === 'otp' ? kind : 'update']));
+
+  async function post(url, body) {
+    const res = await fetchFn(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${wa.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`WhatsApp API ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    return res.json();
+    const textBody = await res.text();
+    if (!res.ok) throw new Error(`WhatsApp API ${res.status}: ${textBody.slice(0, 300)}`);
+    let data = {};
+    try { data = JSON.parse(textBody); } catch { /* not JSON */ }
+    // mart2meta answers 200 with { result: 'failed', message } on errors.
+    if (data && typeof data === 'object' && (data.result === 'failed' || data.result === 'error' || data.status === 'error' || data.error)) {
+      throw new Error(`WhatsApp provider: ${String(data.message ?? data.error ?? 'failed').slice(0, 300)}`);
+    }
+    return data;
+  }
+
+  // mart2meta: one template per message, variables as field_1, field_2, ...
+  function mart2metaBody(row) {
+    const p = JSON.parse(row.payload);
+    const kind = row.kind === 'otp' || row.kind === 'pass' ? row.kind : 'update';
+    const fields = kind === 'otp' ? [p.code]
+      : kind === 'pass' ? [p.title, `${p.body} ${config.appUrl}/p/${p.token}`]
+      : [p.title, p.body];
+    return {
+      from_phone_number_id: wa.phoneNumberId,
+      phone_number: row.recipient.replace(/^\+/, ''),
+      template_name: templateFor[kind],
+      template_language: wa.language,
+      ...Object.fromEntries(fields.map((f, i) => [`field_${i + 1}`, kind === 'otp' ? String(f) : clean(f)])),
+    };
   }
 
   function templateBody(row) {
@@ -73,7 +104,8 @@ export function createWhatsApp(db, config) {
 
   async function deliver(row) {
     try {
-      await post('messages', templateBody(row));
+      if (mart2meta) await post(`${wa.baseUrl}/${wa.vendorUid}/contact/send-template-message`, mart2metaBody(row));
+      else await post(graph('messages'), templateBody(row));
       markSent.run(row.id);
     } catch (err) {
       markRetry.run(err.message.slice(0, 500), row.id);
@@ -99,7 +131,7 @@ export function createWhatsApp(db, config) {
   }
 
   function enqueue(kind, recipient, payload, preview) {
-    const configured = Boolean(wa?.token);
+    const configured = sends(kind);
     insert.run(kind, recipient, JSON.stringify(configured || kind !== 'otp' ? payload : {}), preview, configured ? 'queued' : 'logged');
     if (!configured && config.logOutbound) console.log(`[whatsapp → ${recipient}] ${preview}`);
     if (configured) setImmediate(kick);
@@ -107,6 +139,7 @@ export function createWhatsApp(db, config) {
 
   return {
     configured: Boolean(wa?.token),
+    sends,
     // The code never appears in the readable log; it's printed to the console
     // only when WhatsApp isn't configured, for trying the app locally.
     sendOtp: (phone, code) => {

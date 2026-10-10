@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
 import { HttpError } from './http.js';
 
-// Admin logins expire sooner, as they can see everyone's details.
-const SESSION_DAYS = { admin: 3, security: 30, visitor: 60 };
+// Everyone stays logged in for 30 days.
+const SESSION_DAYS = { admin: 30, security: 30, visitor: 30 };
 const OTP_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
 export const SESSION_COOKIE = 'sid';

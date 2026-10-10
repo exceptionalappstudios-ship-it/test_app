@@ -66,6 +66,14 @@ Open http://localhost:3000. Without WhatsApp set up, login codes are printed in 
 
 ## Setting up WhatsApp
 
+**With mart2meta** (current provider): in Railway → Variables, add `WHATSAPP_TOKEN` (API access token),
+`WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VENDOR_UID` (YOURUID) and `WHATSAPP_OTP_TEMPLATE=appointment_test_ashram`.
+Login codes then go on WhatsApp and are no longer shown on screen. Updates and passes are sent too once their templates
+exist (`WHATSAPP_TEMPLATE`, `WHATSAPP_PASS_TEMPLATE`, variables field_1 = title, field_2 = message); until then they show
+in the app. **More → WhatsApp delivery** shows what was sent and any errors.
+
+### Meta's Cloud API directly
+
 The app uses Meta's official **WhatsApp Cloud API**. Meta charges a small fee per message (login codes are
 "authentication" messages; updates and passes are "utility" messages).
 

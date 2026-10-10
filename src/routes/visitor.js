@@ -3,7 +3,7 @@ import QRCode from 'qrcode';
 import { transaction, getSetting } from '../db.js';
 import { requireUser, requireProfile } from '../auth.js';
 import { HttpError, text, phone as parsePhone, normalizePhone, rateLimiter } from '../http.js';
-import { findReference, referenceHasPhone } from '../references.js';
+import { findReference, referenceHasPhone, referenceAdminIds } from '../references.js';
 import {
   ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, appointmentView, viewsWithPeople, passState, visitEndsAt, sqlTime,
 } from '../appointments.js';
@@ -178,6 +178,11 @@ export function visitorRoutes({ db, notifier, config, now }) {
       `${formatVisit(appt)} · ${count} ${count === 1 ? 'person' : 'people'}. We will confirm soon.`,
       { phone: appt.phone });
     notifier.emitToStaff('appointment', { id: appt.id });
+    // A phone alert for the reference they chose.
+    const ref = config.references.find((r) => r.name === appt.reference);
+    for (const id of referenceAdminIds(db, config.references, ref?.id, config.defaultCountryCode)) {
+      notifier.pushOnly(id, 'New visit request 🙏', `${appt.name} · ${formatVisit(appt)} · ${count} ${count === 1 ? 'person' : 'people'}`, '/admin.html#/requests');
+    }
     res.status(201).json({ appointment: viewsWithPeople(db, [appt])[0] });
   });
 

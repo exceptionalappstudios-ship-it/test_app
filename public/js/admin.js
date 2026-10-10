@@ -1,9 +1,9 @@
 import {
   $, $$, api, esc, formatDate, formatShortDate, formatPhone, formatTime, formatWhen, addDays, plural, statusChip, photoTag,
   contactButtons, toast, openSheet, confirmSheet, busy, throttle, createRouter, goBack, liveStream, homeFor, wrongAccount, PERIOD_ICONS, phoneField, isTenDigits,
-  visitTimer, stars,
+  visitTimer, stars, askForAlerts, registerServiceWorker,
 } from './common.js';
-import { reportHtml, shareReport } from './report.js';
+import { reportHtml, shareReport, saveReportPdf } from './report.js';
 import { icons } from './icons.js';
 import { renderProfileSetup } from './login.js';
 import { photoPicker } from './photo.js';
@@ -32,6 +32,7 @@ function setUser(u) {
   $('#me').classList.toggle('hidden', !ready);
   $('#live').classList.toggle('hidden', !ready);
   $('#me').innerHTML = u?.photo ? `<img src="${esc(u.photo)}" alt="">` : icons.user;
+  if (ready && u.role === 'admin') askForAlerts(config.vapidPublicKey, 'Get an alert on this phone when someone asks for a visit.');
   stopStream?.();
   stopStream = null;
   if (ready) {
@@ -546,21 +547,24 @@ let reportDate = null;
 async function reportView(ctx) {
   await ensureToday();
   reportDate ??= today;
-  header('Day report', 'Share it or save it as PDF');
+  header('Day report', 'Share as picture or PDF');
   dayNav(reportDate, (d) => { reportDate = d; reportView(ctx); });
   const r = await api(`/api/admin/report?date=${reportDate}`);
   if (!ctx.isCurrent()) return;
   ctx.el.innerHTML = `
     <div class="actions report-actions" style="margin:0 0 14px">
       <button class="btn" data-share>${icons.send} Share picture</button>
-      <button class="btn light" data-print>${icons.list} Save PDF</button>
+      <button class="btn light" data-print>${icons.list} Download PDF</button>
     </div>
     ${reportHtml(r)}`;
   $('[data-share]', ctx.el).addEventListener('click', async (e) => {
     const how = await busy(e.currentTarget, () => shareReport(r));
     if (how === 'downloaded') toast('Picture saved ✓');
   });
-  $('[data-print]', ctx.el).addEventListener('click', () => window.print());
+  $('[data-print]', ctx.el).addEventListener('click', async (e) => {
+    const how = await busy(e.currentTarget, () => saveReportPdf(r));
+    if (how === 'downloaded') toast('PDF saved ✓');
+  });
 }
 
 async function feedbackView(ctx) {
@@ -734,6 +738,7 @@ const router = createRouter({
   onChange: (route) => $$('[data-tab]').forEach((a) => a.classList.toggle('on', a.dataset.tab === route.tab)),
 });
 
+registerServiceWorker();
 [config, { user }] = await Promise.all([api('/api/config'), api('/api/auth/me')]);
 if (user && user.role !== 'admin') { header('Admin'); wrongAccount(outlet, user, 'admins'); }
 else {

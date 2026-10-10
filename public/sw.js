@@ -18,7 +18,8 @@ self.addEventListener('notificationclick', (event) => {
   const url = new URL(event.notification.data?.url || '/#/visit', self.location.origin).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const existing = windows.find((w) => new URL(w.url).pathname === '/');
+    // Reuse an open window of the same app (visitor, admin or security).
+    const existing = windows.find((w) => new URL(w.url).pathname === new URL(url).pathname);
     if (existing) {
       await existing.focus();
       return existing.navigate(url);

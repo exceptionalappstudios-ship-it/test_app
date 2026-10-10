@@ -95,8 +95,11 @@ export function createNotifier(db, { vapidSubject, whatsapp }) {
     whatsapp.sendPass(appt.phone, appt.pass_token, title, body);
   }
 
+  // A phone alert only (no in-app message), e.g. telling an admin about a new request.
+  const pushOnly = (userId, title, body, url) => sendPush(userId, { title, body, url }).catch(() => {});
+
   return {
-    notify, sendPass, emitToUser, emitToStaff, publicKey,
+    notify, sendPass, pushOnly, emitToUser, emitToStaff, publicKey,
     openUserStream: (req, res, userId) => openStream(req, res, null, userId),
     openStaffStream: (req, res) => openStream(req, res, staffStreams),
   };

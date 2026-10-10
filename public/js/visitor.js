@@ -1,6 +1,6 @@
 import {
   $, $$, api, esc, formatDate, formatShortDate, formatPhone, formatWhen, dayParts, plural, statusChip, photoTag, contactButtons,
-  toast, openSheet, confirmSheet, busy, createRouter, goBack, replaceHash, phoneField, tenDigits, isTenDigits, liveStream, homeFor, enablePush, pushSupported, registerServiceWorker, PERIOD_ICONS,
+  toast, openSheet, confirmSheet, busy, createRouter, goBack, replaceHash, phoneField, tenDigits, isTenDigits, liveStream, homeFor, enablePush, pushSupported, registerServiceWorker, askForAlerts, PERIOD_ICONS,
   minutesLeft, stars,
 } from './common.js';
 import { icons } from './icons.js';
@@ -39,6 +39,7 @@ function setUser(u) {
       notification: (n) => { toast(n.title); refreshBadge(); window.dispatchEvent(new CustomEvent('app:update')); },
     });
     refreshBadge();
+    askForAlerts(config.vapidPublicKey, 'Know at once when your visit is confirmed and when your pass is ready.');
   }
 }
 

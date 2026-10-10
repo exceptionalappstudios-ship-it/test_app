@@ -36,5 +36,12 @@ export async function checkPassword(password, stored) {
 const lastTen = (phone) => String(phone ?? '').replace(/\D/g, '').slice(-10);
 
 export const findReference = (references, id) => references.find((r) => r.id === id) ?? null;
+// The admin accounts of a reference (a reference can have more than one number).
+export const referenceAdminIds = (db, references, id, countryCode = '91') => {
+  const ref = findReference(references, id);
+  if (!ref) return [];
+  const phones = ref.phones.map((p) => `+${countryCode}${p}`);
+  return db.prepare(`SELECT id FROM users WHERE role = 'admin' AND phone IN (${phones.map(() => '?').join(',')})`).all(...phones).map((r) => r.id);
+};
 export const referenceOfPhone = (references, phone) => references.find((r) => r.phones.includes(lastTen(phone))) ?? null;
 export const referenceHasPhone = (ref, phone) => Boolean(ref && String(phone ?? '').replace(/\D/g, '').length >= 10 && ref.phones.includes(lastTen(phone)));

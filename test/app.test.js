@@ -30,7 +30,8 @@ beforeEach(async () => {
       fetch: async (url, opts) => {
         const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : 'multipart';
         sent.push({ url, body });
-        return { ok: true, json: async () => ({ id: url.endsWith('/media') ? 'media-1' : 'msg-1' }) };
+        const answer = { id: url.endsWith('/media') ? 'media-1' : 'msg-1' };
+        return { ok: true, json: async () => answer, text: async () => JSON.stringify(answer) };
       },
     },
   });
@@ -691,4 +692,36 @@ test('a visit lasts 30 minutes after check-in, then feedback opens; the daily re
   assert.deepEqual(r.staff, [{ name: 'Ramesh Guard', groups: 1, people: 2 }]);
   assert.deepEqual([r.feedback.count, r.feedback.average, r.feedback.comments[0].comment], [1, 4, 'Very peaceful, thank you']);
   assert.equal((await s('/api/admin/report')).status, 403);
+});
+
+test('WhatsApp through mart2meta: login codes use the authentication template; other kinds wait for their templates', async () => {
+  const { createWhatsApp } = await import('../src/whatsapp.js');
+  const calls = [];
+  const wa = createWhatsApp(db, {
+    appUrl: 'https://app.example',
+    whatsapp: { provider: 'mart2meta', token: 'secret-token', phoneNumberId: '123', vendorUid: 'uid-1', baseUrl: 'https://login.mart2meta.com/api', otpTemplate: 'appointment_test_ashram', template: null, passTemplate: null, language: 'en' },
+    fetch: async (url, opts) => { calls.push({ url, opts }); return { ok: true, text: async () => '{"result":"success"}' }; },
+  });
+  wa.sendOtp('+919876543210', '123456');
+  wa.sendUpdate('+919876543210', 'Visit confirmed', 'Line one\nline two');
+  await wa.kick();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://login.mart2meta.com/api/uid-1/contact/send-template-message');
+  assert.equal(calls[0].opts.headers.Authorization, 'Bearer secret-token');
+  assert.deepEqual(JSON.parse(calls[0].opts.body), { from_phone_number_id: '123', phone_number: '919876543210', template_name: 'appointment_test_ashram', template_language: 'en', field_1: '123456' });
+  const rows = db.prepare('SELECT kind, status, payload FROM outbound_messages ORDER BY id').all();
+  assert.deepEqual(rows.map((r) => [r.kind, r.status]), [['otp', 'sent'], ['update', 'logged']]);
+  assert.equal(rows[0].payload, '{}'); // the code is not kept
+
+  // A provider error inside a 200 answer is retried, not treated as sent.
+  const failing = createWhatsApp(db, {
+    appUrl: 'https://app.example',
+    whatsapp: { provider: 'mart2meta', token: 't', phoneNumberId: '1', vendorUid: 'u', baseUrl: 'https://x', otpTemplate: 'appointment_test_ashram', language: 'en' },
+    fetch: async () => ({ ok: true, text: async () => '{"result":"failed","message":"Template not found"}' }),
+  });
+  failing.sendOtp('+919800000000', '654321');
+  await failing.kick();
+  const last = db.prepare('SELECT status, error FROM outbound_messages ORDER BY id DESC LIMIT 1').get();
+  assert.equal(last.status, 'queued');
+  assert.match(last.error, /Template not found/);
 });

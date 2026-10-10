@@ -1,7 +1,7 @@
 import express from 'express';
 import { issueOtp, checkOtp, publicUser, startSession, endSession, requireUser } from '../auth.js';
 import { HttpError, text, phone as parsePhone, rateLimiter } from '../http.js';
-import { checkPassword, findReference } from '../references.js';
+import { checkPassword, findReference, referenceAdminIds } from '../references.js';
 
 export function authRoutes({ db, whatsapp, notifier, config, photos }) {
   const router = express.Router();
@@ -89,7 +89,13 @@ export function authRoutes({ db, whatsapp, notifier, config, photos }) {
     if (user.role === 'security' && user.status === 'pending' && req.body?.referenceId !== undefined) {
       const ref = findReference(config.references, req.body.referenceId);
       if (!ref) throw new HttpError(400, 'Please choose your reference from the list');
+      const changed = user.reference_id !== ref.id;
       user = db.prepare('UPDATE users SET reference_id = ? WHERE id = ? RETURNING *').get(ref.id, user.id);
+      if (changed && user.photo) {
+        for (const id of referenceAdminIds(db, config.references, ref.id, config.defaultCountryCode)) {
+          notifier.pushOnly(id, 'Security request 🛡️', `${user.name} wants scanner access`, '/admin.html#/security');
+        }
+      }
     }
     if (user.role === 'security') notifier.emitToStaff('security');
     res.json({ user: publicUser(user) });
@@ -107,6 +113,12 @@ export function authRoutes({ db, whatsapp, notifier, config, photos }) {
     const user = db.prepare('UPDATE users SET photo = ? WHERE id = ? RETURNING *').get(name, req.user.id);
     if (old && old !== name && !photoInUse.get(old)) photos.remove(old);
     if (user.role === 'security') notifier.emitToStaff('security');
+    // A new security sign-up is complete once the photo is in: alert their reference.
+    if (user.role === 'security' && user.status === 'pending' && user.reference_id && !old) {
+      for (const id of referenceAdminIds(db, config.references, user.reference_id, config.defaultCountryCode)) {
+        notifier.pushOnly(id, 'Security request 🛡️', `${user.name ?? 'Someone'} wants scanner access`, '/admin.html#/security');
+      }
+    }
     res.json({ user: publicUser(user) });
   });
 

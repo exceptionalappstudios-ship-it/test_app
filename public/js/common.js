@@ -286,6 +286,33 @@ export async function registerServiceWorker() {
 }
 const b64 = (s) => Uint8Array.from(atob((s + '='.repeat((4 - (s.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
 export const pushSupported = () => !window.__DEMO__ && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+// Asks once (and again 3 days after "Later") to turn on phone alerts.
+// If alerts are already allowed, makes sure this phone is still subscribed.
+const LATER_KEY = 'alertsLater';
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } } };
+export function askForAlerts(vapidPublicKey, why = 'Know at once when something changes.') {
+  if (window.__DEMO__) return;
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  const installed = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (pushSupported() && Notification.permission === 'granted') { enablePush(vapidPublicKey).catch(() => {}); return; }
+  if (pushSupported() ? Notification.permission !== 'default' : !(ios && !installed)) return;
+  if (Number(store.get(LATER_KEY) ?? 0) > Date.now()) return;
+  setTimeout(() => {
+    if (document.querySelector('.sheet')) return;
+    const howIos = ios && !installed;
+    const { el, close } = openSheet(`<div class="center">
+      <div class="big-icon ok" style="font-size:2.2rem">🔔</div>
+      <h2>Turn on alerts?</h2>
+      <p class="sub">${esc(why)}</p>
+      ${howIos ? `<div class="notice info" style="text-align:left">${icons.info}<span>On iPhone: tap <b>Share</b> ⬆️ then <b>Add to Home Screen</b>. Open the app from there to turn on alerts.</span></div>` : ''}
+      <div class="actions">${howIos ? '' : `<button class="btn block" data-on>${icons.bell} Turn on</button>`}<button class="btn light block" data-later>Later</button></div></div>`);
+    $('[data-later]', el).addEventListener('click', () => { store.set(LATER_KEY, String(Date.now() + 3 * 86400000)); close(); });
+    $('[data-on]', el)?.addEventListener('click', async (e) => {
+      try { await busy(e.currentTarget, () => enablePush(vapidPublicKey)); toast('Alerts are on 🔔'); close(); } catch { store.set(LATER_KEY, String(Date.now() + 3 * 86400000)); close(); }
+    });
+  }, 1500);
+}
+
 export async function enablePush(vapidPublicKey) {
   if (!pushSupported()) throw new Error('This phone does not support app notifications. You will still get every update on WhatsApp.');
   if (await Notification.requestPermission() !== 'granted') throw new Error('Notifications were not allowed. You will still get every update on WhatsApp.');
