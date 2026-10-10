@@ -586,14 +586,21 @@ async function feedbackView(ctx) {
 
 async function outboxView(ctx) {
   header('WhatsApp delivery', 'The latest messages sent by the app.');
-  const { messages } = await api('/api/admin/outbox');
+  const { messages, whatsapp: w } = await api('/api/admin/outbox');
   if (!ctx.isCurrent()) return;
+  // Connection status: which settings the server sees (names only).
+  const status = w.connected
+    ? `<div class="notice ok" style="margin-bottom:14px">${icons.checkCircle}<span><b>WhatsApp connected</b> (${esc(w.provider)}). Login codes use the template <b>${esc(w.otpTemplate)}</b>.</span></div>`
+    : `<div class="notice bad" style="margin-bottom:14px">${icons.alert}<span><b>WhatsApp not connected.</b> Login codes are shown on screen.
+        ${w.missing?.length ? `<br>Missing in Railway → Variables: <b>${w.missing.map(esc).join(', ')}</b>` : ''}
+        ${w.seen?.length ? `<br>The server sees: ${w.seen.map(esc).join(', ')}` : '<br>The server sees no WhatsApp settings. After adding variables in Railway, press <b>Deploy</b> to apply them.'}</span></div>`;
+  ctx.el.innerHTML = status;
   const chip = { sent: 'approved', failed: 'rejected', queued: 'pending', sending: 'pending', logged: 'hold' };
-  const word = { sent: 'Sent', failed: 'Failed', queued: 'Waiting', sending: 'Sending', logged: 'Not sent (WhatsApp not set up)' };
-  ctx.el.innerHTML = `<div class="card flush">${messages.length ? messages.map((m) => `<div class="person" style="align-items:flex-start"><div class="grow">
+  const word = { sent: 'Sent', failed: 'Failed', queued: 'Waiting', sending: 'Sending', logged: 'Not sent on WhatsApp (shown in the app)' };
+  ctx.el.insertAdjacentHTML('beforeend', `<div class="card flush">${messages.length ? messages.map((m) => `<div class="person" style="align-items:flex-start"><div class="grow">
     <div class="row" style="justify-content:space-between"><span class="name">${esc(formatPhone(m.recipient))}</span><span class="status ${chip[m.status]}">${esc(word[m.status])}</span></div>
     <div class="small" style="margin-top:4px">${esc(m.preview)}</div>
-    <div class="meta">${esc(formatWhen(m.created_at))}${m.error ? ` · ${esc(m.error)}` : ''}</div></div></div>`).join('') : '<div class="empty">Nothing sent yet.</div>'}</div>`;
+    <div class="meta">${esc(formatWhen(m.created_at))}${m.error ? ` · ${esc(m.error)}` : ''}</div></div></div>`).join('') : '<div class="empty">Nothing sent yet.</div>'}</div>`);
 }
 
 // ---- Express pass ----------------------------------------------------------------------

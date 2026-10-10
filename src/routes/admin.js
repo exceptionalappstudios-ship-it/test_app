@@ -439,7 +439,10 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
   // ---- WhatsApp delivery log ----------------------------------------------------------
 
   router.get('/outbox', (_req, res) => {
-    res.json({ messages: db.prepare('SELECT id, kind, recipient, preview, status, error, created_at, sent_at FROM outbound_messages ORDER BY id DESC LIMIT 100').all() });
+    res.json({
+      whatsapp: config.whatsappStatus ?? { connected: Boolean(config.whatsapp), missing: [], seen: [] },
+      messages: db.prepare('SELECT id, kind, recipient, preview, status, error, created_at, sent_at FROM outbound_messages ORDER BY id DESC LIMIT 100').all(),
+    });
   });
 
   return router;

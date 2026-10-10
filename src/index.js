@@ -53,6 +53,18 @@ const config = {
 };
 if (config.sessionTimes === undefined) delete config.sessionTimes;
 
+// Which WhatsApp settings are present (names only, never values), shown to admins.
+const waNeeded = env.WHATSAPP_VENDOR_UID || env.WHATSAPP_PROVIDER === 'mart2meta'
+  ? ['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_VENDOR_UID', 'WHATSAPP_OTP_TEMPLATE']
+  : ['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'];
+config.whatsappStatus = {
+  connected: Boolean(config.whatsapp),
+  provider: config.whatsapp?.provider ?? null,
+  otpTemplate: config.whatsapp?.otpTemplate ?? null,
+  missing: waNeeded.filter((k) => !env[k]?.trim()),
+  seen: Object.keys(env).filter((k) => /WHATSAPP|MART2META/i.test(k)).sort(),
+};
+
 const db = openDatabase(env.DATABASE_FILE || path.join(dataDir, 'appointments.db'));
 
 // The admins are exactly the people on the reference list (src/references.js).
@@ -75,6 +87,8 @@ for (const { id } of removed) db.prepare('DELETE FROM auth_sessions WHERE user_i
 console.log(`${adminPhones.length} admins ready. They log in at ${appUrl}/admin.html with their number and the admin password.`);
 if (!config.whatsapp) {
   console.warn('WhatsApp is not set up yet (WHATSAPP_TOKEN). Messages and login codes will be printed here instead.');
+} else {
+  console.log(`WhatsApp connected (${config.whatsapp.provider}); login code template: ${config.whatsapp.otpTemplate}`);
 }
 
 const app = createApp({ db, config });
