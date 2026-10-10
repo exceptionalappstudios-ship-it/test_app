@@ -173,6 +173,7 @@ export function goBack(fallback) {
 
 export function createRouter({ outlet, routes, fallback, guard, onChange }) {
   let current = null;
+  let enterTimer = null;
   const backBtn = document.getElementById('back');
   backBtn?.addEventListener('click', () => current?.back && goBack(current.back));
   async function run() {
@@ -192,10 +193,19 @@ export function createRouter({ outlet, routes, fallback, guard, onChange }) {
       onChange?.(route, hash);
       window.scrollTo(0, 0);
       outlet.innerHTML = '<div class="card"><div class="spinner"></div></div>';
+      // A new screen slides in gently once; later live refreshes don't animate.
+      outlet.classList.remove('enter');
+      void outlet.offsetWidth;
+      outlet.classList.add('enter');
+      clearTimeout(enterTimer);
+      enterTimer = setTimeout(() => outlet.classList.remove('enter'), 900);
       try {
         await route.view(ctx, ...match.slice(1));
       } catch (err) {
-        if (ctx.isCurrent()) outlet.innerHTML = `<div class="card"><div class="notice bad">${icons.alert}<span>${esc(err.message)}</span></div><div class="actions"><button class="btn light" onclick="location.reload()">Try again</button></div></div>`;
+        if (ctx.isCurrent()) {
+          outlet.innerHTML = `<div class="card"><div class="notice bad">${icons.alert}<span>${esc(err.message)}</span></div><div class="actions"><button class="btn light" data-retry>Try again</button></div></div>`;
+          outlet.querySelector('[data-retry]').addEventListener('click', () => location.reload());
+        }
       }
       return;
     }

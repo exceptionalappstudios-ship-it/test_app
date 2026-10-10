@@ -63,7 +63,7 @@ export function staffRoutes({ db, notifier, config, now }) {
       WHERE id = ? AND status = 'approved' AND checked_in_at IS NULL RETURNING id
     `).get(req.user.id, count, appt.id);
     if (!done) throw new HttpError(409, 'Already checked in with this QR code.', { result: 'used' });
-    notifier.notify(appt.user_id, appt.id, 'Welcome 🙏', `You are checked in for ${formatVisit(appt)}. Please take a seat.`, { phone: false });
+    notifier.notify(appt.user_id, appt.id, 'Welcome 🙏 You are checked in', 'Please take a seat.', { phone: false });
     notifier.emitToStaff('checkin', { id: appt.id });
     res.json({ appointment: view(req, [getAppointment(db, appt.id)])[0] });
   });

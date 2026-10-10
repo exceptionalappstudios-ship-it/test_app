@@ -88,7 +88,7 @@ export async function startScanner(el, { isAdmin = false, onDone } = {}) {
     <div class="scanner"><video playsinline muted></video><div class="frame"></div><div class="msg" data-msg>Starting camera…</div>
       <div class="off-msg">${icons.camera}<span data-off></span></div></div>
     <form class="card" data-manual style="margin-top:14px">
-      <label for="code" style="margin-top:0">Camera not working? Type the 6-character code</label>
+      <label for="code" style="margin-top:0">No camera? Type the code</label>
       <div class="row"><input id="code" name="code" class="code-input" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="K7M2QX"><button class="btn small" style="min-height:52px;flex:0 0 auto">Check</button></div>
     </form>`;
   const video = $('video', el);
@@ -119,7 +119,7 @@ export async function startScanner(el, { isAdmin = false, onDone } = {}) {
 
   const stop = () => { stopped = true; cancelAnimationFrame(raf); stream?.getTracks().forEach((t) => t.stop()); };
   if (!navigator.mediaDevices?.getUserMedia) {
-    noCamera('Camera is not available on this phone. Type the code below.');
+    noCamera('No camera. Type the code below.');
     return stop;
   }
   try {
@@ -131,7 +131,7 @@ export async function startScanner(el, { isAdmin = false, onDone } = {}) {
   if (stopped) { stop(); return stop; }
   video.srcObject = stream;
   await video.play().catch(() => {});
-  msg.textContent = 'Point the camera at the QR code';
+  msg.textContent = 'Point at the QR code';
 
   let detect;
   if ('BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats?.().catch(() => []))?.includes('qr_code')) {

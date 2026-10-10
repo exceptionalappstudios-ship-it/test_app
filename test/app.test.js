@@ -313,7 +313,7 @@ test('hold, approve with the pass link, reminders, greeting, scan once any time 
   const confirm = messagesTo('+919876543210').at(-1).body;
   assert.equal(confirm.template.name, 'entry_pass');
   const text = templateText(messagesTo('+919876543210').at(-1));
-  assert.match(text, /^Appointment confirmed ✅ \| Asha Rao, your meeting with Gurudev is confirmed for Friday, 11 January \(Evening\) for 2 people\. Entry code: [A-HJ-NP-Z2-9]{6}\. Tap "View pass".*any time on the day of your visit.*scanned only once/);
+  assert.match(text, /^Visit confirmed ✅ \| Asha Rao, you are confirmed for Friday, 11 January \(Evening\) · 2 people\. Entry code: [A-HJ-NP-Z2-9]{6}\. Tap "View pass" and show it at the gate, any time that day\. One scan only\./);
   assert.match(text, /Note: Please bring an ID card/);
   const token = confirm.template.components.find((c) => c.type === 'button').parameters[0].text;
   assert.match(token, /^[\w-]{20,}$/);
@@ -331,7 +331,7 @@ test('hold, approve with the pass link, reminders, greeting, scan once any time 
   const runAt = async (date, time) => { at(IST(date, time)); const n = jobs.run(); await flush(); return n; };
   assert.equal(await runAt('2030-01-10', '17:59'), 0);
   assert.equal(await runAt('2030-01-10', '18:00'), 1);      // day before
-  assert.match(templateText(messagesTo('+919876543210').at(-1)), new RegExp(`tomorrow.*entry code ${code}.*any time tomorrow`));
+  assert.match(templateText(messagesTo('+919876543210').at(-1)), new RegExp(`tomorrow.*entry code ${code}.*Come any time tomorrow`));
   assert.equal(await runAt('2030-01-11', '06:59'), 0);
   assert.equal(await runAt('2030-01-11', '07:00'), 1);      // greeting only; the pass went out already
   assert.match(templateText(messagesTo('+919876543210').at(-1)), new RegExp(`Today is your visit.*entry code ${code}`));
@@ -389,7 +389,7 @@ test('approving on the day sends just the confirmation with the pass', async () 
   assert.equal(app.locals.jobs.run(), 0);
   await flush();
   const titles = sent.filter((s) => s.body?.to === '919876543210' && s.body.template.name !== 'login_code').map((s) => s.body.template.components.find((c) => c.type === 'body').parameters[0].text);
-  assert.deepEqual(titles, ['Request received 🙏', 'Appointment confirmed ✅']);
+  assert.deepEqual(titles, ['Request received 🙏', 'Visit confirmed ✅']);
 });
 
 test('dashboard, date list with search, and who checked people in', async () => {
@@ -436,7 +436,7 @@ test('the WhatsApp pass link opens a small secure pass page', async () => {
 
   let p = await page(); // the day before: the QR shows, with the day it works
   assert.equal(p.status, 200);
-  assert.match(p.html, /Valid on Friday, 11 January · scan once/);
+  assert.match(p.html, /Valid on Friday, 11 January/);
   assert.match(p.html, new RegExp(`class="code">${code}<`));
   assert.equal(p.headers.get('cache-control'), 'no-store');
   assert.match(p.headers.get('content-security-policy'), /default-src 'none'/);
@@ -445,13 +445,14 @@ test('the WhatsApp pass link opens a small secure pass page', async () => {
   p = await page();
   assert.match(p.html, /<svg/);
   assert.match(p.html, new RegExp(`class="code">${code}<`));
-  assert.match(p.html, /Valid today · scan once/);
+  assert.match(p.html, /Valid today/);
+  assert.match(p.html, /One scan only/);
   assert.ok(Buffer.byteLength(p.html) < 12000, `page is ${Buffer.byteLength(p.html)} bytes`);
 
   await a('/api/staff/admit', { method: 'POST', body: { code } });
   p = await page();
   assert.match(p.html, /Checked in/);
-  assert.doesNotMatch(p.html, /<svg/);
+  assert.doesNotMatch(p.html, /class="qr"/);
   assert.equal((await fetch(`${base}/p/not-a-real-token-1234567`)).status, 404);
   // The broadcast feature is gone.
   assert.equal((await a('/api/admin/broadcast', { method: 'POST', body: {} })).status, 404);
@@ -543,7 +544,7 @@ test('admins can create an express pass that is sent at once and valid all day',
   await flush();
   const pass = sent.filter((x) => x.body?.template?.name === 'entry_pass').at(-1).body;
   assert.equal(pass.to, '919845011111');
-  assert.match(templateText(sent.at(-1)), /entry pass for today .* for 3 people\. Entry code: [A-HJ-NP-Z2-9]{6}/);
+  assert.match(templateText(sent.at(-1)), /your pass for today .* · 3 people\. Entry code: [A-HJ-NP-Z2-9]{6}/);
 
   // Valid straight away, even before the session opens; still only once.
   const code = db.prepare('SELECT checkin_code FROM appointments WHERE id = ?').get(appt.id).checkin_code;

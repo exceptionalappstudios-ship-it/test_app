@@ -11,7 +11,10 @@ let user = null;
 let config = null;
 let stopStream = null;
 
-const TABS = [['book', 'Book', icons.calendar], ['visit', 'My visit', icons.ticket], ['updates', 'Updates', icons.bell], ['profile', 'Profile', icons.user]];
+const TABS = [['book', 'Book', icons.calendar], ['visit', 'My pass', icons.ticket], ['updates', 'Updates', icons.bell], ['profile', 'Me', icons.user]];
+// One line with an icon, a small label and a value (used on review and pass).
+const fact = (icon, k, v) => `<div class="fact"><span class="ic">${icon}</span><div><div class="k">${esc(k)}</div><div class="v">${v}</div></div></div>`;
+const firstName = (name) => String(name ?? '').split(' ')[0];
 for (const [key, label, icon] of TABS) $(`[data-tab="${key}"]`).innerHTML = `${icon}<span>${label}</span>`;
 
 function header(title, subtitle = '', steps = 0, step = 0) {
@@ -56,19 +59,19 @@ function onUpdate(ctx, fn) {
 // ---- Login & first-time setup ----------------------------------------------------
 
 function loginView(ctx) {
-  header('Meet Gurudev', 'Book your visit in a few simple steps.');
+  header('Meet Gurudev 🙏', 'Book your visit in 2 minutes');
   renderLogin(ctx.el, {
     onDone: (u) => {
       if (homeFor(u) !== '/') { location.href = homeFor(u); return; }
       setUser(u);
       location.hash = u.profileComplete ? '#/book' : '#/setup';
     },
-    footer: '<p class="center small muted" style="margin-top:18px">Security staff? <a href="/security.html">Register or log in here</a></p>',
+    footer: '<p class="center small muted" style="margin-top:18px">Security staff? <a href="/security.html">Log in here</a></p>',
   });
 }
 
 function setupView(ctx) {
-  header('Welcome 🙏', 'One quick step before you book.');
+  header('Welcome 🙏', 'Your name and photo');
   renderProfileSetup(ctx.el, user, { onDone: (u) => { setUser(u); location.hash = '#/book'; } });
 }
 
@@ -80,10 +83,10 @@ function setupView(ctx) {
 let draft = null;
 let bookingDays = [];
 const STEP_TITLES = {
-  when: ['Book a visit', 'Choose a day and a time of day.'],
-  details: ['About your visit', 'A few questions so we can plan your visit.'],
-  people: ['Who is coming', 'Add the name and number of each person.'],
-  review: ['Check and send', 'Please check everything before sending.'],
+  when: ['Book a visit', 'Pick a day'],
+  details: ['About you', 'A few quick questions'],
+  people: ['Who is coming?', 'Name and number of each person'],
+  review: ['All correct?', 'Check and send'],
 };
 const stepList = () => ['when', 'details', ...(draft?.count > 1 ? ['people'] : []), 'review'];
 const stepHash = (step) => (step === 'when' ? '#/book' : `#/book/${step}`);
@@ -107,20 +110,21 @@ async function bookWhenView(ctx) {
     header('Book a visit', '');
     ctx.el.innerHTML = `<div class="card center">
       <div class="big-icon wait">${icons.ticket}</div>
-      <h2>You already have an appointment</h2>
-      <p class="sub">${esc(formatDate(existing.date))} · ${esc(existing.periodLabel)}<br>Each person can have one appointment at a time.</p>
-      <a class="btn block" href="#/visit">See my visit</a></div>`;
+      <h2>You already have a visit</h2>
+      <div class="chips-row"><span class="pill">${icons.calendar} ${esc(formatShortDate(existing.date))}</span><span class="pill">${PERIOD_ICONS[existing.period] ?? icons.clock} ${esc(existing.periodLabel)}</span></div>
+      <p class="sub" style="margin-top:12px">One visit at a time.</p>
+      <a class="btn block" href="#/visit">${icons.ticket} See my pass</a></div>`;
     return;
   }
   if (avail.closed) {
     header('Book a visit', '');
-    ctx.el.innerHTML = `<div class="card center"><div class="big-icon wait">${icons.calendar}</div><h2>Bookings are closed</h2><p class="sub">${esc(avail.closedMessage)}</p></div>`;
+    ctx.el.innerHTML = `<div class="card center"><div class="big-icon wait">${icons.calendar}</div><h2>Bookings closed</h2><p class="sub">${esc(avail.closedMessage)}</p></div>`;
     return;
   }
   bookingDays = days;
   draft ??= { date: days[0]?.date ?? null, session: null, phone: user.phone, referenceId: '', refPhone: '', refOk: false, count: 1, purposes: [], description: '', people: [], conflicts: {} };
   if (!days.length) {
-    ctx.el.innerHTML = `<div class="card center"><div class="big-icon wait">${icons.calendar}</div><h2>No dates open right now</h2><p class="sub">New dates are added regularly. Please check again soon.</p></div>`;
+    ctx.el.innerHTML = `<div class="card center"><div class="big-icon wait">${icons.calendar}</div><h2>No dates yet</h2><p class="sub">Please check again soon 🙏</p></div>`;
     return;
   }
   if (!days.some((d) => d.date === draft.date)) { draft.date = days[0].date; draft.session = null; }
@@ -129,7 +133,7 @@ async function bookWhenView(ctx) {
     const byPeriod = Object.fromEntries(day.sessions.map((x) => [x.period, x]));
     ctx.el.innerHTML = `
       <div class="card">
-        <h3>Choose a day</h3>
+        <h3>${icons.calendar.replace('<svg', '<svg width="20" height="20" style="vertical-align:-4px;color:var(--blue-700)"')} Pick a day</h3>
         <div class="date-strip" role="listbox" aria-label="Day">
           ${days.map((d) => { const p = dayParts(d.date); return `<button type="button" class="date-pill ${d.date === draft.date ? 'on' : ''}" data-date="${d.date}" role="option" aria-selected="${d.date === draft.date}"><div class="dow">${esc(p.dow)}</div><div class="day">${esc(p.day)}</div><div class="mon">${esc(p.mon)}</div></button>`; }).join('')}
         </div>
@@ -140,7 +144,7 @@ async function bookWhenView(ctx) {
             const full = !x || x.remaining < 1;
             return `<button type="button" class="choice ${x && draft.session?.id === x.id ? 'on' : ''}" data-session="${x?.id ?? ''}" ${full ? 'disabled' : ''}>
               <span class="ic">${PERIOD_ICONS[p]}</span>
-              <span><span class="t">${esc(config.periods[p].label)}</span><br><span class="d">${!x ? 'Not open on this day' : full ? 'Full' : x.remaining < 10 ? `Only ${x.remaining} places left` : 'Places available'}</span></span>
+              <span><span class="t">${esc(config.periods[p].label)}</span><br><span class="d">${!x ? 'Not open' : full ? 'Full' : x.remaining < 10 ? `${x.remaining} places left` : '✓ Open'}</span></span>
               <span class="tick">${icons.check}</span></button>`;
           }).join('')}
         </div>
@@ -171,46 +175,45 @@ function bookDetailsView(ctx, problem = '') {
       <div class="row">
         ${photoTag(user.photo, user.name, 'lg')}
         <div class="grow"><div style="font-weight:800;font-size:1.1rem">${esc(user.name)}</div>
-        <div class="small muted">Security will check this photo at the entrance.</div>
+        <div class="small muted">Security will see this photo 📷</div>
         <button type="button" class="btn ghost small" data-photo>${icons.camera} Change photo</button></div>
       </div>
     </div>
     <div class="card">
-      <h3>${icons.whatsapp.replace('<svg', '<svg width="20" height="20" style="vertical-align:-4px;color:#0b7d3d"')} Your entry pass</h3>
+      <h3>${icons.whatsapp.replace('<svg', '<svg width="20" height="20" style="vertical-align:-4px;color:#0b7d3d"')} Your pass comes on WhatsApp</h3>
       <div data-wa>
-        <p class="sub" style="margin:0">Your confirmation and QR pass will be sent on WhatsApp to <strong>${esc(formatPhone(normal(draft.phone)))}</strong>.</p>
-        <button type="button" class="btn ghost small" data-change-wa>${icons.edit} Use a different number</button>
+        <div class="big-number">${esc(formatPhone(normal(draft.phone)))}</div>
+        <button type="button" class="btn ghost small" data-change-wa>${icons.edit} Change number</button>
       </div>
     </div>
     <form class="card" novalidate>
-      <h3 style="margin-bottom:2px">Who referred you?</h3>
-      <p class="small muted" style="margin:0">Choose your reference and enter their phone number. You can book only if the number is right.</p>
-      <label for="referenceId">Reference <span class="muted small">(required)</span></label>
+      <h3 style="margin-bottom:2px">🙏 Who referred you?</h3>
+      <p class="small muted" style="margin:0">Pick a name, then type their number.</p>
+      <label for="referenceId">Name</label>
       <select id="referenceId">
-        <option value="">Choose your reference</option>
+        <option value="">Choose…</option>
         ${config.references.map((r) => `<option value="${esc(r.id)}" ${r.id === draft.referenceId ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}
       </select>
-      <label for="refPhone">Their phone number <span class="muted small">(required)</span></label>
+      <label for="refPhone">Their phone number</label>
       ${phoneField('refPhone', draft.refPhone)}
-      <div class="hint">The phone number of the person you chose.</div>
     </form>
     <form class="card" novalidate>
-      <div class="label" style="margin-top:0">How many people are coming, including you?</div>
+      <div class="label" style="margin-top:0">👥 How many people? <span class="muted small">(with you)</span></div>
       <div class="stepper">
         <button type="button" data-dec aria-label="Fewer people">${icons.minus}</button>
         <span class="n">${draft.count}</span>
         <button type="button" data-inc aria-label="More people">${icons.plus}</button>
         <span class="muted small">${draft.count === 1 ? 'Just me' : `You + ${plural(draft.count - 1, 'person', 'people')}`}</span>
       </div>
-      <div class="hint">${maxPeople() < config.maxPeople ? `Only ${maxPeople()} places are left in this session.` : `Up to ${config.maxPeople} people.`}</div>
-      <div class="label">Purpose of meeting <span class="muted small">(choose one or more)</span></div>
+      <div class="hint">${maxPeople() < config.maxPeople ? `Only ${maxPeople()} places left` : `Up to ${config.maxPeople}`}</div>
+      <div class="label">🎯 Why are you coming? <span class="muted small">(pick one or more)</span></div>
       <div class="choices">
         ${Object.entries(config.purposes).map(([key, label]) => `
           <button type="button" class="choice check ${draft.purposes.includes(key) ? 'on' : ''}" data-purpose="${key}" aria-pressed="${draft.purposes.includes(key)}">
             <span class="t" style="font-weight:600">${esc(label)}</span><span class="tick">${icons.check}</span></button>`).join('')}
       </div>
-      <label for="description">Tell us in a few words ${draft.purposes.includes('other') ? '<span class="muted small">(required)</span>' : '<span class="muted small">(optional)</span>'}</label>
-      <textarea id="description" maxlength="500" placeholder="For example: blessings for my daughter's wedding">${esc(draft.description)}</textarea>
+      <label for="description">✍️ A few words ${draft.purposes.includes('other') ? '' : '<span class="muted small">(optional)</span>'}</label>
+      <textarea id="description" maxlength="500" placeholder="e.g. Blessings for my daughter's wedding">${esc(draft.description)}</textarea>
     </form>
     ${problemBox(problem)}
     <div class="actions" style="margin-top:0"><button class="btn light" data-back>${icons.back} Back</button><button class="btn" data-next>Continue ${icons.next}</button></div>`;
@@ -229,9 +232,8 @@ function bookDetailsView(ctx, problem = '') {
   $('[data-photo]', ctx.el).addEventListener('click', () => { keep(); changePhoto(() => bookDetailsView(ctx)); });
   $('[data-change-wa]', ctx.el).addEventListener('click', () => {
     $('[data-wa]', ctx.el).innerHTML = `
-      <label for="wa" style="margin-top:0">WhatsApp number for your pass</label>
-      ${phoneField('wa', draft.phone)}
-      <div class="hint">The QR pass and all updates will go to this number.</div>`;
+      <label for="wa" style="margin-top:0">WhatsApp number</label>
+      ${phoneField('wa', draft.phone)}`;
     $('#wa', ctx.el).focus();
   });
   const setCount = (n) => { keep(); draft.count = Math.max(1, Math.min(maxPeople(), n)); draft.people = draft.people.slice(0, draft.count - 1); bookDetailsView(ctx); };
@@ -245,11 +247,11 @@ function bookDetailsView(ctx, problem = '') {
   $('[data-back]', ctx.el).addEventListener('click', () => { keep(); goBack('#/book'); });
   $('[data-next]', ctx.el).addEventListener('click', async (e) => {
     keep();
-    const msg = !isTenDigits(tenDigits(draft.phone)) ? 'Please enter the 10-digit WhatsApp number for your pass.'
-      : !draft.referenceId ? 'Please choose who referred you.'
-      : !isTenDigits(draft.refPhone) ? "Please enter your reference's 10-digit phone number."
-      : !draft.purposes.length ? 'Please choose the purpose of your meeting.'
-      : draft.purposes.includes('other') && !draft.description.trim() ? 'Please tell us in a few words about your visit.' : '';
+    const msg = !isTenDigits(tenDigits(draft.phone)) ? 'Please type your 10-digit WhatsApp number.'
+      : !draft.referenceId ? 'Please pick who referred you.'
+      : !isTenDigits(draft.refPhone) ? 'Please type their 10-digit number.'
+      : !draft.purposes.length ? 'Please pick why you are coming.'
+      : draft.purposes.includes('other') && !draft.description.trim() ? 'Please write a few words.' : '';
     if (msg) return again(msg);
     // The reference's number must match before going on.
     if (!draft.refOk) {
@@ -274,11 +276,11 @@ function bookPeopleView(ctx, problem = '') {
   ctx.el.innerHTML = `
     ${own ? problemBox(own) : ''}
     ${draft.people.map((p, i) => `<div class="card" data-person="${i}">
-        <div class="row" style="justify-content:space-between"><h3 style="margin:0">Person ${i + 2}</h3>
+        <div class="row" style="justify-content:space-between"><h3 style="margin:0">👤 Person ${i + 2}</h3>
           <button type="button" class="btn ghost small" data-remove="${i}" style="color:var(--red)">${icons.trash} Remove</button></div>
-        <label for="pn${i}">Full name</label>
+        <label for="pn${i}">Name</label>
         <input id="pn${i}" data-field="name" maxlength="80" value="${esc(p.name)}" placeholder="Name">
-        <label for="pp${i}">Phone number (10 digits)</label>
+        <label for="pp${i}">Phone number</label>
         ${phoneField(`pp${i}`, p.phone)}
         <div data-warn></div>
       </div>`).join('')}
@@ -296,9 +298,9 @@ function bookPeopleView(ctx, problem = '') {
     const p = draft.people[i];
     if (!isTenDigits(p.phone)) return '';
     const mine = normal(p.phone);
-    if (mine === normal(draft.phone) || mine === user.phone) return 'This is your own number. Please enter this person\'s number.';
+    if (mine === normal(draft.phone) || mine === user.phone) return 'This is your number. Please type their number.';
     const other = draft.people.findIndex((q, j) => j !== i && isTenDigits(q.phone) && normal(q.phone) === mine);
-    if (other >= 0) return `Same number as person ${other + 2}. Each person needs their own number.`;
+    if (other >= 0) return `Same as person ${other + 2}. Each person needs their own number.`;
     return draft.conflicts[mine] ?? '';
   };
   const showWarnings = () => {
@@ -335,11 +337,11 @@ function bookPeopleView(ctx, problem = '') {
   $('[data-next]', ctx.el).addEventListener('click', async (e) => {
     keep();
     const missing = draft.people.findIndex((p) => p.name.length < 2 || !isTenDigits(p.phone));
-    if (missing >= 0) return bookPeopleView(ctx, `Please enter the name and 10-digit phone number of person ${missing + 2}.`);
+    if (missing >= 0) return bookPeopleView(ctx, `Please add the name and number of person ${missing + 2}.`);
     const { conflicts } = await busy(e.currentTarget, () => api('/api/appointments/check', { method: 'POST', body: { phones: [normal(draft.phone), user.phone, ...draft.people.map((p) => normal(p.phone))] } }));
     draft.conflicts = Object.fromEntries(conflicts.map((c) => [c.phone, c.message]));
     if (draft.people.some((_, i) => warningFor(i)) || draft.conflicts[normal(draft.phone)] || draft.conflicts[user.phone]) {
-      return bookPeopleView(ctx, 'Please fix the numbers marked in red. Change the number, or remove that person.');
+      return bookPeopleView(ctx, 'Please fix the numbers in red, or remove that person.');
     }
     go('review');
   });
@@ -349,21 +351,22 @@ function bookPeopleView(ctx, problem = '') {
 function bookReviewView(ctx, problem = '') {
   if (!draft?.session) { replaceHash('#/book'); return; }
   stepHeader('review');
+  const refName = config.references.find((r) => r.id === draft.referenceId)?.name ?? '';
   ctx.el.innerHTML = `
     <div class="card">
-      <div class="row">${photoTag(user.photo, user.name, 'lg')}<div class="grow">
+      <div class="hello">${photoTag(user.photo, user.name, 'lg')}<div class="grow">
         <div style="font-weight:800;font-size:1.15rem">${esc(user.name)}</div>
-        <div class="muted small">${icons.whatsapp.replace('<svg', '<svg width="14" height="14" style="vertical-align:-2px"')} Pass will be sent to ${esc(formatPhone(normal(draft.phone)))}</div></div></div>
-      <dl class="details">
-        <dt>Day</dt><dd><strong>${esc(formatDate(draft.date))}</strong></dd>
-        <dt>Time</dt><dd><strong>${esc(draft.session.label)}</strong></dd>
-        <dt>People</dt><dd>${esc(plural(draft.count, 'person', 'people'))}${draft.people.length ? `<br>${draft.people.map((p) => esc(p.name)).join(', ')}` : ''}</dd>
-        <dt>Reference</dt><dd>${esc(config.references.find((r) => r.id === draft.referenceId)?.name ?? '')}</dd>
-        <dt>Purpose</dt><dd>${draft.purposes.map((p) => esc(config.purposes[p])).join(', ')}</dd>
-        ${draft.description.trim() ? `<dt>Details</dt><dd>${esc(draft.description)}</dd>` : ''}
-      </dl>
+        <div class="muted small">${icons.whatsapp.replace('<svg', '<svg width="14" height="14" style="vertical-align:-2px;color:#0b7d3d"')} ${esc(formatPhone(normal(draft.phone)))}</div></div></div>
+      <div class="facts" style="margin-top:10px">
+        ${fact(icons.calendar, 'Day', esc(formatDate(draft.date)))}
+        ${fact(PERIOD_ICONS[draft.session.period] ?? icons.clock, 'Time', esc(draft.session.label))}
+        ${fact(icons.users, 'People', `${esc(plural(draft.count, 'person', 'people'))}${draft.people.length ? `<div class="small muted" style="font-weight:500">${draft.people.map((p) => esc(p.name)).join(', ')}</div>` : ''}`)}
+        ${fact(icons.user, 'Referred by', esc(refName))}
+        ${fact(icons.info, 'Why', draft.purposes.map((p) => esc(config.purposes[p])).join(', '))}
+        ${draft.description.trim() ? fact(icons.edit, 'Note', esc(draft.description)) : ''}
+      </div>
     </div>
-    <div class="notice info" style="margin-bottom:14px">${icons.info}<span>After the ashram confirms, you will get a message on WhatsApp. With the confirmation you get your QR entry pass. Show it any time on the day of your visit.</span></div>
+    <div class="notice info" style="margin-bottom:14px">${icons.whatsapp}<span>We will confirm on WhatsApp. <b>Your pass comes with it.</b></span></div>
     ${problemBox(problem)}
     <div class="actions" style="margin-top:0"><button class="btn light" data-back>${icons.back} Back</button><button class="btn" data-send>${icons.send} Send request</button></div>`;
   $('[data-back]', ctx.el).addEventListener('click', () => goBack(draft.count > 1 ? '#/book/people' : '#/book/details'));
@@ -390,18 +393,22 @@ let sessionDone = null;
 function bookDoneView(ctx) {
   const a = sessionDone;
   if (!a) { replaceHash('#/visit'); return; }
-  header('Request sent 🙏', 'We will let you know soon.');
+  header('Request sent 🙏', '');
   ctx.el.innerHTML = `<div class="card center">
     <div class="big-icon ok">${icons.checkCircle}</div>
-    <h2>Thank you, ${esc(user.name.split(' ')[0])}</h2>
-    <p class="sub">Your request for <strong>${esc(formatDate(a.date))}, ${esc(a.periodLabel)}</strong> for ${esc(plural(a.peopleCount, 'person', 'people'))} has been sent.<br><br>
-    Once the ashram confirms, your QR entry pass will be sent on WhatsApp and will also show in this app.</p>
-    <a class="btn block" href="#/visit">${icons.ticket} See my visit</a></div>`;
+    <h2>Thank you, ${esc(firstName(user.name))}!</h2>
+    <div class="chips-row">
+      <span class="pill">${icons.calendar} ${esc(formatShortDate(a.date))}</span>
+      <span class="pill">${PERIOD_ICONS[a.period] ?? icons.clock} ${esc(a.periodLabel)}</span>
+      <span class="pill">${icons.users} ${esc(String(a.peopleCount))}</span>
+    </div>
+    <p class="sub" style="margin-top:14px">${icons.whatsapp.replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px;color:#0b7d3d"')} We will confirm on WhatsApp soon.</p>
+    <a class="btn block" href="#/visit">${icons.ticket} See my pass</a></div>`;
 }
 
 function changePhoto(after) {
   let blob = null;
-  const { el, close } = openSheet(`<h2 style="margin:0 0 4px">Change photo</h2><div data-picker></div>
+  const { el, close } = openSheet(`<h2 style="margin:0 0 4px">📷 New photo</h2><div data-picker></div>
     <div class="actions"><button class="btn light" data-close>Cancel</button><button class="btn" data-save disabled>${icons.check} Save photo</button></div>`);
   const save = $('[data-save]', el);
   photoPicker($('[data-picker]', el), { current: user.photo, onChange: (b) => { blob = b; save.disabled = !b; } });
@@ -409,7 +416,7 @@ function changePhoto(after) {
     const { user: u } = await busy(save, () => uploadPhoto(blob));
     setUser(u);
     close();
-    toast('Photo saved.');
+    toast('Photo saved ✓');
     after?.();
   });
 }
@@ -417,59 +424,65 @@ function changePhoto(after) {
 // ---- My visit -----------------------------------------------------------------------
 
 async function visitView(ctx) {
-  header('My visit', 'Your appointment and entry pass.');
+  header('My pass', '');
   const render = async () => {
     const { appointments } = await api('/api/me');
     if (!ctx.isCurrent()) return;
     const current = appointments.find((a) => a.upcoming || a.pass.state === 'ready' || (a.pass.state === 'checked_in' && a.date >= new Date().toISOString().slice(0, 10)));
     const past = appointments.filter((a) => a !== current);
-    let passHtml = '';
+    const when = (a) => `<div class="chips-row">
+      <span class="pill">${icons.calendar} ${esc(formatShortDate(a.date))}</span>
+      <span class="pill">${PERIOD_ICONS[a.period] ?? icons.clock} ${esc(a.periodLabel)}</span>
+      <span class="pill">${icons.users} ${esc(String(a.peopleCount))}</span></div>`;
+    // The pass: one colour per state, big and simple.
+    let ticket = '';
     if (current) {
       const p = current.pass;
       if (p.state === 'ready') {
         const { pass } = await api(`/api/me/appointments/${current.id}/pass`);
         if (!ctx.isCurrent()) return;
-        passHtml = pass.state === 'ready' ? `<div class="pass">
-          <div class="notice ok" style="justify-content:center">${icons.checkCircle}<span>${pass.today ? 'Show this QR code at the entrance' : `Confirmed. Show this on ${esc(formatShortDate(pass.validOn))}`}</span></div>
-          <div class="qr">${pass.svg}</div>
-          <div class="small muted" style="letter-spacing:.08em;font-weight:700">ENTRY CODE</div>
-          <div class="entry-code">${esc(pass.code)}</div>
-          <div class="who">${esc(current.name)}</div>
-          <div class="muted">${esc(plural(current.peopleCount, 'person', 'people'))} · ${esc(current.periodLabel)}</div>
-          <p class="small muted">${pass.today ? 'Valid any time today.' : `Valid any time on ${esc(formatDate(pass.validOn))}.`} It can be scanned only once.</p></div>` : '';
-      } else if (p.state === 'not_yet') {
-        passHtml = `<div class="pass"><div class="big-icon wait">${icons.clock}</div>
-          <h2>Confirmed ✅</h2><p class="sub">Your QR entry pass will be sent on WhatsApp on <strong>${esc(formatShortDate(p.opensOn))} at ${esc(p.opensAt)}</strong>. It will also show here.</p></div>`;
+        ticket = pass.state === 'ready' ? `<div class="ticket">
+          <div class="band ${pass.today ? 'go' : 'soon'}">${icons.checkCircle} ${pass.today ? 'Ready · Show at the gate' : `Confirmed · ${esc(formatShortDate(pass.validOn))}`}</div>
+          <div class="body">
+            <div class="qr ${pass.today ? 'glow' : ''}">${pass.svg}</div>
+            <div class="code-label">ENTRY CODE</div>
+            <div class="code">${esc(pass.code)}</div>
+            <div class="who">${esc(current.name)}</div>
+            ${when(current)}
+            <p class="small muted" style="margin:12px 0 0">✓ Any time that day &nbsp;·&nbsp; ✓ One scan only</p>
+          </div></div>` : '';
       } else if (p.state === 'checked_in') {
-        passHtml = `<div class="pass"><div class="big-icon ok">${icons.checkCircle}</div><h2>You are checked in</h2><p class="sub">Welcome! Please take a seat.</p></div>`;
+        ticket = `<div class="ticket"><div class="band done">${icons.checkCircle} Checked in</div><div class="body">
+          <div class="stamp go">${icons.check}</div><h2>Welcome 🙏</h2><p class="sub">Please take a seat.</p></div></div>`;
       } else if (['pending', 'hold'].includes(current.status)) {
-        passHtml = `<div class="pass"><div class="big-icon wait">${icons.clock}</div><h2>Waiting for confirmation</h2>
-          <p class="sub">Your request is being reviewed. We will tell you on WhatsApp and here.</p></div>`;
+        ticket = `<div class="ticket"><div class="band wait">${icons.clock} Waiting for confirmation</div><div class="body">
+          <div class="stamp wait">${icons.clock}</div><div class="who" style="margin-top:0">${esc(current.name)}</div>${when(current)}
+          <p class="sub" style="margin-top:12px">${icons.whatsapp.replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px;color:#0b7d3d"')} We will tell you on WhatsApp.</p></div></div>`;
       }
     }
     ctx.el.innerHTML = current ? `
-      <div class="card">${passHtml}</div>
+      ${ticket}
       <div class="card">
-        <div class="row" style="justify-content:space-between"><h3 style="margin:0">${esc(formatDate(current.date))}</h3>${statusChip(current.status, current.checkedInAt)}</div>
-        <dl class="details">
-          <dt>Time</dt><dd>${esc(current.periodLabel)}</dd>
-          <dt>People</dt><dd>${esc(plural(current.peopleCount, 'person', 'people'))}${current.people.length ? `<br>${esc(current.name)}, ${current.people.map((p) => esc(p.name)).join(', ')}` : ''}</dd>
-          <dt>WhatsApp</dt><dd>${esc(formatPhone(current.phone))}</dd>
-          <dt>Reference</dt><dd>${esc(current.reference)}</dd>
-          <dt>Purpose</dt><dd>${current.purposes.map(esc).join(', ')}</dd>
-          ${current.adminNote ? `<dt>Note</dt><dd><strong>${esc(current.adminNote)}</strong></dd>` : ''}
-        </dl>
-        ${!current.checkedInAt ? `<div class="actions"><button class="btn danger" data-cancel="${current.id}">${icons.x} Cancel appointment</button></div>` : ''}
+        <div class="facts">
+          ${fact(icons.user, 'Referred by', esc(current.reference))}
+          ${current.people.length ? fact(icons.users, 'With you', current.people.map((x) => esc(x.name)).join(', ')) : ''}
+          ${fact(icons.whatsapp, 'WhatsApp', esc(formatPhone(current.phone)))}
+          ${current.adminNote ? fact(icons.info, 'Note from the ashram', `<strong>${esc(current.adminNote)}</strong>`) : ''}
+        </div>
+        ${!current.checkedInAt ? `<div class="actions"><button class="btn danger small" data-cancel="${current.id}">${icons.x} Cancel visit</button></div>` : ''}
       </div>` : `
-      <div class="card center"><div class="big-icon wait">${icons.calendar}</div><h2>No upcoming visit</h2><p class="sub">Book a day and time to meet Gurudev.</p><a class="btn block" href="#/book">${icons.calendar} Book a visit</a></div>`;
+      <div class="ticket"><div class="band off">${icons.ticket} No pass yet</div><div class="body">
+        <div class="stamp off">${icons.calendar}</div><h2>Book your visit</h2><p class="sub">Pick a day to meet Gurudev 🙏</p>
+        <a class="btn block" href="#/book">${icons.calendar} Book a visit</a></div></div>`;
     if (past.length) {
       ctx.el.insertAdjacentHTML('beforeend', `<div class="section-title">Earlier</div><div class="card flush">${past.map((a) => `
         <div class="person"><div class="grow"><div class="name">${esc(formatShortDate(a.date))} · ${esc(a.periodLabel)}</div><div class="meta">${esc(plural(a.peopleCount, 'person', 'people'))}</div></div>${statusChip(a.status, a.checkedInAt)}</div>`).join('')}</div>`);
     }
     $('[data-cancel]', ctx.el)?.addEventListener('click', async (e) => {
-      if (!await confirmSheet({ title: 'Cancel this appointment?', message: 'Your place will be given to someone else.', confirm: 'Yes, cancel', danger: true })) return;
-      await busy(e.target, () => api(`/api/me/appointments/${e.target.dataset.cancel}/cancel`, { method: 'POST' }));
-      toast('Appointment cancelled.');
+      const btn = e.currentTarget;
+      if (!await confirmSheet({ title: 'Cancel your visit?', message: 'Your place will go to someone else.', confirm: 'Yes, cancel', danger: true })) return;
+      await busy(btn, () => api(`/api/me/appointments/${btn.dataset.cancel}/cancel`, { method: 'POST' }));
+      toast('Visit cancelled');
       render();
     });
   };
@@ -481,15 +494,27 @@ async function visitView(ctx) {
 
 // ---- Updates ---------------------------------------------------------------------------
 
+// Each update gets a colour and an icon, so its meaning is clear at a glance.
+function noteStyle(title) {
+  const t = title.toLowerCase();
+  if (/declined|cancel|removed|not approved|sorry/.test(t)) return ['red', icons.xCircle];
+  if (/confirmed|approved|pass|checked in|welcome/.test(t)) return ['green', /pass/.test(t) ? icons.ticket : icons.checkCircle];
+  if (/today|tomorrow|reminder/.test(t)) return ['amber', icons.sun];
+  return ['blue', icons.bell];
+}
+
 async function updatesView(ctx) {
-  header('Updates', 'Every update is also sent to you on WhatsApp.');
+  header('Updates', 'Also sent on WhatsApp');
   const render = async () => {
     const { notifications, unread } = await api('/api/me');
     if (!ctx.isCurrent()) return;
-    ctx.el.innerHTML = `<div class="card flush">${notifications.length ? notifications.map((n) => `
-      <div class="person" style="align-items:flex-start;${n.read_at ? '' : 'background:var(--blue-50)'}">
-        <div class="grow"><div class="row" style="justify-content:space-between;align-items:flex-start"><span class="name">${esc(n.title)}</span><span class="meta" style="white-space:nowrap">${esc(formatWhen(n.created_at))}</span></div>
-        <div style="margin-top:4px;white-space:pre-wrap">${esc(n.body)}</div></div></div>`).join('') : '<div class="empty">No updates yet.</div>'}</div>`;
+    ctx.el.innerHTML = notifications.length ? `<div class="feed">${notifications.map((n) => {
+      const [tone, icon] = noteStyle(n.title);
+      // Updates about a visit open "My pass" when tapped.
+      const tag = n.appointment_id ? 'a' : 'div';
+      return `<${tag} class="note ${tone} ${n.read_at ? '' : 'unread'}"${n.appointment_id ? ' href="#/visit"' : ''}><span class="ic">${icon}</span>
+        <div class="grow"><div class="t">${esc(n.title)}</div><div class="b">${esc(n.body)}</div><div class="w">${esc(formatWhen(n.created_at))}</div></div>${n.appointment_id ? `<span class="go">${icons.next}</span>` : ''}</${tag}>`;
+    }).join('')}</div>` : `<div class="ticket"><div class="band off">${icons.bell} No updates yet</div><div class="body"><p class="sub" style="margin:0">News about your visit will show here 🙏</p></div></div>`;
     if (unread) { await api('/api/me/notifications/read', { method: 'POST' }); refreshBadge(); }
   };
   await render();
@@ -499,7 +524,7 @@ async function updatesView(ctx) {
 // ---- Profile -----------------------------------------------------------------------------
 
 async function profileView(ctx) {
-  header('My profile');
+  header('Me', '');
   const c = config.contact;
   ctx.el.innerHTML = `
     <div class="card center">
@@ -509,22 +534,22 @@ async function profileView(ctx) {
       <button class="btn light small" data-photo>${icons.camera} Change photo</button>
     </div>
     <form class="card" data-name novalidate>
-      <label for="name" style="margin-top:0">Full name</label>
+      <label for="name" style="margin-top:0">Your name</label>
       <input id="name" name="name" maxlength="80" value="${esc(user.name)}">
       <div class="actions"><button class="btn small" type="submit">Save name</button></div>
     </form>
-    ${pushSupported() && Notification.permission !== 'granted' ? `<div class="card row"><div class="grow"><strong>Alerts on this phone</strong><div class="small muted">Get updates even when the app is closed.</div></div><button class="btn small blue" data-push>Turn on</button></div>` : ''}
-    ${c.phone || c.whatsapp ? `<div class="card"><h3>Need help?</h3><div class="row"><div class="grow small muted">${c.address ? esc(c.address) : 'Call or message the ashram office.'}</div>${contactButtons(c.whatsapp ?? c.phone)}</div></div>` : ''}
+    ${pushSupported() && Notification.permission !== 'granted' ? `<div class="card row"><div class="grow"><strong>🔔 Get alerts</strong><div class="small muted">Even when the app is closed</div></div><button class="btn small blue" data-push>Turn on</button></div>` : ''}
+    ${c.phone || c.whatsapp ? `<div class="card"><h3>🙋 Need help?</h3><div class="row"><div class="grow small muted">${c.address ? esc(c.address) : 'Call or WhatsApp us'}</div>${contactButtons(c.whatsapp ?? c.phone)}</div></div>` : ''}
     <button class="btn danger block" data-logout>${icons.logout} Log out</button>`;
   $('[data-photo]', ctx.el).addEventListener('click', () => changePhoto(() => profileView(ctx)));
   $('[data-name]', ctx.el).addEventListener('submit', async (e) => {
     e.preventDefault();
     const { user: u } = await busy($('button', e.target), () => api('/api/auth/me', { method: 'PATCH', body: { name: e.target.name.value } }));
     setUser(u);
-    toast('Name saved.');
+    toast('Name saved ✓');
   });
   $('[data-push]', ctx.el)?.addEventListener('click', async (e) => {
-    try { await enablePush(config.vapidPublicKey); e.target.closest('.card').remove(); toast('Alerts are on.'); } catch (err) { toast(err.message); }
+    try { await enablePush(config.vapidPublicKey); e.target.closest('.card').remove(); toast('Alerts are on 🔔'); } catch (err) { toast(err.message); }
   });
   $('[data-logout]', ctx.el).addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {});

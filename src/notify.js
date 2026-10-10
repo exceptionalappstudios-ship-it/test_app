@@ -87,10 +87,11 @@ export function createNotifier(db, { vapidSubject, whatsapp }) {
 
   // The entry pass: in-app notification plus a WhatsApp message with the
   // entry code and a link to the pass page (not the QR image itself).
-  function sendPass(appt, title, body) {
-    const notification = insertNotification.get(appt.user_id, appt.id, title, body);
+  // `appBody` is a shorter text for the app, where the pass is one tap away.
+  function sendPass(appt, title, body, appBody = body) {
+    const notification = insertNotification.get(appt.user_id, appt.id, title, appBody);
     emitToUser(appt.user_id, 'notification', notification);
-    sendPush(appt.user_id, { title, body, url: '/#/visit' }).catch(() => {});
+    sendPush(appt.user_id, { title, body: appBody, url: '/#/visit' }).catch(() => {});
     whatsapp.sendPass(appt.phone, appt.pass_token, title, body);
   }
 

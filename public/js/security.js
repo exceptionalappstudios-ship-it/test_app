@@ -38,7 +38,7 @@ $('#me').addEventListener('click', () => {
 });
 
 function loginView(ctx) {
-  header('Security staff', 'Log in or register to scan visitor passes.');
+  header('Security 🛡️', 'Log in to scan passes');
   renderLogin(ctx.el, {
     signupAs: 'security',
     onDone: (u) => {
@@ -51,7 +51,7 @@ function loginView(ctx) {
 }
 
 function setupView(ctx) {
-  header('Register as security', 'Your reference will see your name and photo and approve you.');
+  header('Join as security', 'Your reference will approve you');
   renderProfileSetup(ctx.el, user, {
     intro: 'Add your name, choose your reference and take a clear photo of your face. Your reference will approve your access.',
     references: user.status === 'pending' ? config.references : null,
@@ -63,17 +63,17 @@ function setupView(ctx) {
 async function scanView(ctx) {
   if (user.role === 'security' && user.status !== 'active') {
     const waiting = user.status === 'pending';
-    header(waiting ? 'Waiting for approval' : 'No access');
+    header(waiting ? 'Almost there ⏳' : 'No access');
     ctx.el.innerHTML = `<div class="card center narrow">
       ${photoTag(user.photo, user.name, 'xl')}
       <h2 style="margin-top:12px">${esc(user.name)}</h2>
       <div class="big-icon ${waiting ? 'wait' : 'bad'}" style="margin-top:14px">${waiting ? icons.clock : icons.xCircle}</div>
-      <p class="sub">${waiting ? `Your request has been sent to <strong>${esc(config.references.find((r) => r.id === user.referenceId)?.name ?? 'your reference')}</strong>. This page will open the scanner as soon as you are approved.` : 'Your scanner access has been removed. Please speak to the admin.'}</p>
-      ${waiting ? `<a class="btn ghost small" href="#/setup">${icons.edit} Change details or reference</a>` : ''}
+      <p class="sub">${waiting ? `Sent to <strong>${esc(config.references.find((r) => r.id === user.referenceId)?.name ?? 'your reference')}</strong>. The scanner opens here once approved.` : 'Access removed. Please speak to the admin.'}</p>
+      ${waiting ? `<a class="btn ghost small" href="#/setup">${icons.edit} Change details</a>` : ''}
     </div>`;
     return;
   }
-  header('Scan pass', 'Scan the QR code on the visitor\'s phone.');
+  header('Scan pass', 'Point at the QR code');
   const area = document.createElement('div');
   const recent = document.createElement('div');
   ctx.el.replaceChildren(area, recent);
@@ -94,7 +94,7 @@ async function scanView(ctx) {
         const b = ev.target.closest('[data-count]');
         if (!b) return;
         await busy(b, () => api('/api/staff/count', { method: 'POST', body: { appointmentId: a.id, count: Number(b.dataset.count) } }));
-        toast(`Saved: ${plural(Number(b.dataset.count), 'person', 'people')} came in.`);
+        toast(`Saved ✓ ${plural(Number(b.dataset.count), 'person', 'people')} came in`);
         close();
         loadRecent();
       });

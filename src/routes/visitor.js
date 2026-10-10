@@ -175,7 +175,7 @@ export function visitorRoutes({ db, notifier, config, now }) {
     bookingLimit(user.id); // counts only requests that were made
     const appt = getAppointment(db, appointmentId);
     notifier.notify(user.id, appt.id, 'Request received 🙏',
-      `We have received your request to meet Gurudev on ${formatVisit(appt)} for ${count} ${count === 1 ? 'person' : 'people'}. We will send you a confirmation after it is reviewed.`,
+      `${formatVisit(appt)} · ${count} ${count === 1 ? 'person' : 'people'}. We will confirm soon.`,
       { phone: appt.phone });
     notifier.emitToStaff('appointment', { id: appt.id });
     res.status(201).json({ appointment: viewsWithPeople(db, [appt])[0] });
@@ -207,7 +207,7 @@ export function visitorRoutes({ db, notifier, config, now }) {
     const appt = own(req);
     if (!['pending', 'hold', 'approved'].includes(appt.status) || appt.checked_in_at) throw new HttpError(409, 'This appointment cannot be cancelled');
     db.prepare("UPDATE appointments SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?").run(appt.id);
-    notifier.notify(req.user.id, appt.id, 'Appointment cancelled', `Your appointment on ${formatVisit(appt)} has been cancelled.`, { phone: false });
+    notifier.notify(req.user.id, appt.id, 'Visit cancelled', `${formatVisit(appt)} is cancelled.`, { phone: false });
     notifier.emitToStaff('appointment', { id: appt.id });
     res.json({ appointment: viewsWithPeople(db, [getAppointment(db, appt.id)])[0] });
   });

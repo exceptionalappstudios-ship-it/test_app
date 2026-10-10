@@ -29,9 +29,11 @@ export const peopleIn = (a) => a.checked_in_count ?? a.people_count;
 
 // Text of the WhatsApp pass messages (the link goes in the "View pass" button).
 const group = (a) => `${a.people_count} ${a.people_count === 1 ? 'person' : 'people'}`;
-const passHowTo = (a) => `Entry code: ${a.checkin_code}. Tap "View pass" to open your QR code. Show it at the entrance any time on the day of your visit. It can be scanned only once, and security can also type the entry code.`;
-export const passMessage = (a, when) => `${a.name}, your entry pass for ${when} for ${group(a)}. ${passHowTo(a)}`;
-export const confirmMessage = (a, when) => `${a.name}, your meeting with Gurudev is confirmed for ${when} for ${group(a)}. ${passHowTo(a)}`;
+const passHowTo = (a) => `Entry code: ${a.checkin_code}. Tap "View pass" and show it at the gate, any time that day. One scan only.`;
+export const passMessage = (a, when) => `${a.name}, your pass for ${when} · ${group(a)}. ${passHowTo(a)}`;
+// Short text for the app and phone alerts: the pass itself is in "My pass".
+export const passAppMessage = (a, when) => `${when} · ${group(a)}. Your pass is ready 🎟️`;
+export const confirmMessage = (a, when) => `${a.name}, you are confirmed for ${when} · ${group(a)}. ${passHowTo(a)}`;
 
 export const ACTIVE = "('pending', 'hold', 'approved')";
 

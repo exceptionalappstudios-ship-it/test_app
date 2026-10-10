@@ -88,7 +88,7 @@ export async function processPhoto(file) {
 
 // Renders the photo picker into `el`. Calls onChange(blob) once a photo is ready.
 // With `requireFace`, a photo is accepted only when a face is found in it.
-export function photoPicker(el, { current, onChange, requireFace = false, prompt = 'Add a clear photo of your face. Security will use it to recognise you at the entrance.' }) {
+export function photoPicker(el, { current, onChange, requireFace = false, prompt = 'Face the camera, in good light.' }) {
   preloadFaceDetector();
   el.innerHTML = `
     <div class="photo-pick">
@@ -96,9 +96,9 @@ export function photoPicker(el, { current, onChange, requireFace = false, prompt
       <p class="sub" data-msg>${esc(prompt)}</p>
       <div data-status></div>
       <div class="actions" style="margin-top:10px">
-        <button type="button" class="btn blue" style="margin:0" data-selfie>${icons.camera} Take a selfie</button>
+        <button type="button" class="btn blue" style="margin:0" data-selfie>${icons.camera} Selfie</button>
         <input type="file" accept="image/*" capture="user" data-file data-selfie-file hidden>
-        <label class="btn light file-btn" style="margin:0">${icons.image} Choose photo<input type="file" accept="image/*" data-file></label>
+        <label class="btn light file-btn" style="margin:0">${icons.image} Gallery<input type="file" accept="image/*" data-file></label>
       </div>
     </div>`;
   const preview = $('.preview', el);
@@ -106,25 +106,25 @@ export function photoPicker(el, { current, onChange, requireFace = false, prompt
 
   async function handle(file) {
     if (!file) return;
-    status.innerHTML = '<div class="notice info"><div class="spinner" style="width:20px;height:20px;margin:0;border-width:2px"></div><span>Finding your face…</span></div>';
+    status.innerHTML = '<div class="notice info"><div class="spinner" style="width:20px;height:20px;margin:0;border-width:2px"></div><span>Checking…</span></div>';
     try {
       const result = await processPhoto(file);
       const url = URL.createObjectURL(result.blob);
       preview.innerHTML = `<img src="${url}" alt="Your photo">`;
       if (result.faceFound) {
-        status.innerHTML = `<div class="notice ok">${icons.checkCircle}<span>${result.faces > 1 ? 'We used the biggest face in the photo. ' : ''}Face found. This photo looks good.</span></div>`;
+        status.innerHTML = `<div class="notice ok">${icons.checkCircle}<span>Looks good ✓</span></div>`;
         onChange(result.blob);
       } else if (!result.checked && requireFace) {
-        status.innerHTML = `<div class="notice warn">${icons.alert}<span>We could not check the photo for a face. Please check your internet connection and take the photo again.</span></div>`;
+        status.innerHTML = `<div class="notice warn">${icons.alert}<span>Could not check. Check your internet and try again.</span></div>`;
         onChange(null);
       } else if (!result.checked) {
         status.innerHTML = '';
         onChange(result.blob);
       } else if (requireFace) {
-        status.innerHTML = `<div class="notice bad">${icons.alert}<span>No face found. Please take a clear photo of your face, looking at the camera, in good light. You can continue only when your face is found.</span></div>`;
+        status.innerHTML = `<div class="notice bad">${icons.alert}<span>No face seen. Look at the camera, in good light, and try again.</span></div>`;
         onChange(null);
       } else {
-        status.innerHTML = `<div class="notice warn">${icons.alert}<span>We could not find a face. Please take a clear photo of your face, looking at the camera, in good light.</span></div>
+        status.innerHTML = `<div class="notice warn">${icons.alert}<span>No face seen. Try again, facing the camera.</span></div>
           <button type="button" class="btn ghost small" data-anyway>Use this photo anyway</button>`;
         onChange(null);
         $('[data-anyway]', status).addEventListener('click', () => { status.innerHTML = ''; onChange(result.blob); });
@@ -158,8 +158,8 @@ export function photoPicker(el, { current, onChange, requireFace = false, prompt
     } catch (err) {
       const blocked = err?.name === 'NotAllowedError' || err?.name === 'SecurityError';
       status.innerHTML = `<div class="notice warn">${icons.alert}<span>${blocked
-        ? 'Camera permission is blocked. Allow the camera for this site in your browser settings, or tap “Choose photo”.'
-        : 'Could not open the camera. Tap “Choose photo” to use a photo instead.'}</span></div>`;
+        ? 'Camera is blocked. Allow it in settings, or tap “Gallery”.'
+        : 'Camera did not open. Tap “Gallery”.'}</span></div>`;
       return;
     }
     status.innerHTML = '';
@@ -170,7 +170,7 @@ export function photoPicker(el, { current, onChange, requireFace = false, prompt
     await video.play().catch(() => {});
     actions.hidden = true;
     actions.insertAdjacentHTML('afterend', `<div class="actions" data-cam style="margin-top:10px">
-      <button type="button" class="btn blue" style="margin:0" data-snap>${icons.camera} Capture</button>
+      <button type="button" class="btn blue" style="margin:0" data-snap>${icons.camera} Click</button>
       <button type="button" class="btn light" style="margin:0" data-cancel>Cancel</button></div>`);
     $('[data-cancel]', el).addEventListener('click', () => closeCamera(before));
     $('[data-snap]', el).addEventListener('click', () => {

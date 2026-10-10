@@ -3,7 +3,7 @@ import { transaction, getSetting, setSetting } from '../db.js';
 import { requireAdmin, publicUser } from '../auth.js';
 import { HttpError, text, phone as parsePhone, rateLimiter } from '../http.js';
 import {
-  ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, viewsWithPeople, currentPeriod, newCheckinCode, newPassToken, passMessage, confirmMessage,
+  ACTIVE, APPOINTMENT_SELECT, PURPOSES, MAX_PEOPLE, getAppointment, viewsWithPeople, currentPeriod, newCheckinCode, newPassToken, passMessage, confirmMessage, passAppMessage,
 } from '../appointments.js';
 import { nowInTimezone, addDays, dayOfWeek, formatVisit, formatDay, PERIODS, DATE_RE } from '../time.js';
 import { findReference, referenceOfPhone } from '../references.js';
@@ -149,12 +149,11 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
       // The confirmation carries the pass link, so it can be opened any time.
       const a = getAppointment(db, appt.id);
       db.prepare("UPDATE appointments SET pass_sent_at = COALESCE(pass_sent_at, datetime('now')) WHERE id = ?").run(a.id);
-      notifier.sendPass(a, 'Appointment confirmed ✅',
-        `${confirmMessage(a, when)}${suffix}`);
+      notifier.sendPass(a, 'Visit confirmed ✅', `${confirmMessage(a, when)}${suffix}`, `${passAppMessage(a, when)}${suffix}`);
     }
     const messages = {
-      rejected: ['Appointment request declined', `We are sorry, your request for ${when} could not be accommodated.${suffix}`],
-      cancelled: ['Appointment cancelled', `Your appointment on ${when} has been cancelled by the ashram.${suffix}`],
+      rejected: ['Sorry, request declined', `We could not give you a visit on ${when}.${suffix}`],
+      cancelled: ['Visit cancelled', `Your visit on ${when} is cancelled by the ashram.${suffix}`],
     };
     if (messages[status]) notifier.notify(appt.user_id, appt.id, ...messages[status], { phone: appt.phone });
     notifier.emitToStaff('appointment', { id: appt.id });
@@ -222,7 +221,7 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
     });
 
     const appt = getAppointment(db, id);
-    notifier.sendPass(appt, 'Your express entry pass 🎟️', passMessage(appt, `today (${formatDay(t)})`));
+    notifier.sendPass(appt, 'Your express pass 🎟️', passMessage(appt, `today (${formatDay(t)})`), passAppMessage(appt, 'Today'));
     notifier.emitToStaff('appointment', { id });
     res.status(201).json({ appointment: viewsWithPeople(db, [appt])[0] });
   });
@@ -258,9 +257,9 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
     }
     db.prepare("UPDATE users SET status = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(status, req.user.id, u.id);
     const msg = {
-      active: ['Scanner access approved ✅', 'You can now open the app and scan visitor passes.'],
-      revoked: ['Scanner access removed', 'Your access to the visitor scanner has been removed by the admin.'],
-      rejected: ['Security registration not approved', 'Your request for scanner access was not approved.'],
+      active: ['Approved ✅ You can scan now', 'Open the app to scan passes.'],
+      revoked: ['Scanner access removed', 'Please speak to the admin.'],
+      rejected: ['Sorry, not approved', 'Your scanner request was not approved.'],
     }[status];
     notifier.notify(u.id, null, ...msg, { path: '' });
     notifier.emitToUser(u.id, 'status', { status });
