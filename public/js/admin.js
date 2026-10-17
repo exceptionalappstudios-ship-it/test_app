@@ -596,9 +596,9 @@ async function outboxView(ctx) {
         ${w.seen?.length ? `<br>The server sees: ${w.seen.map(esc).join(', ')}` : '<br>The server sees no WhatsApp settings. After adding variables in Railway, press <b>Deploy</b> to apply them.'}</span></div>`;
   ctx.el.innerHTML = status;
   const chip = { sent: 'approved', failed: 'rejected', queued: 'pending', sending: 'pending', logged: 'hold' };
-  const word = { sent: 'Sent', failed: 'Failed', queued: 'Waiting', sending: 'Sending', logged: 'Not sent on WhatsApp (shown in the app)' };
+  const word = { sent: 'Sent', failed: 'Failed', queued: 'Waiting', sending: 'Sending', logged: 'In app only' };
   ctx.el.insertAdjacentHTML('beforeend', `<div class="card flush">${messages.length ? messages.map((m) => `<div class="person" style="align-items:flex-start"><div class="grow">
-    <div class="row" style="justify-content:space-between"><span class="name">${esc(formatPhone(m.recipient))}</span><span class="status ${chip[m.status]}">${esc(word[m.status])}</span></div>
+    <div class="row wrap" style="justify-content:space-between"><span class="name">${esc(formatPhone(m.recipient))}</span><span class="status ${chip[m.status]}">${esc(word[m.status])}</span></div>
     <div class="small" style="margin-top:4px">${esc(m.preview)}</div>
     <div class="meta">${esc(formatWhen(m.created_at))}${m.error ? ` · ${esc(m.error)}` : ''}</div></div></div>`).join('') : '<div class="empty">Nothing sent yet.</div>'}</div>`);
 }

@@ -275,7 +275,11 @@ img.photo { display: block; }
 .day-nav .icon-btn { background: rgba(255, 231, 163, .14); color: #ffe7a3; }
 .day-nav input { background: rgba(255, 231, 163, .12); border: 1.5px solid rgba(246, 180, 22, .45); color: #fff8e7; padding: 9px 12px; font-weight: 650; }
 .day-nav input::-webkit-calendar-picker-indicator { filter: invert(1); }
-.day-nav .lbl { font-weight: 700; color: #fff; }
+.day-nav .lbl { font-weight: 700; color: #ffe7a3; white-space: nowrap; }
+/* The date bar shrinks to fit narrow phones. */
+.day-nav input { flex: 1 1 auto; min-width: 0; }
+.day-nav .icon-btn { width: 40px; height: 40px; }
+@media (max-width: 360px) { .day-nav { gap: 6px; } .day-nav .btn.small { padding: 8px 10px; } .day-nav input { padding: 8px 6px; font-size: 15px; } }
 
 /* ---- Sheets, toast -------------------------------------------------------------- */
 .backdrop { position: fixed; inset: 0; background: rgba(40, 6, 12, .5); z-index: 40; }
@@ -543,8 +547,11 @@ body.ready #splash { animation: splash-out .3s ease forwards; }
 @keyframes splash-out { to { opacity: 0; visibility: hidden; } }
 @media (prefers-reduced-motion: reduce) { #splash { animation-duration: .01s; } }
 
+.brand > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wa-box .big-number { white-space: nowrap; font-size: clamp(1rem, 5.2vw, 1.2rem); }
 /* Small screens (older/smaller phones, 320–360 px wide). */
 @media (max-width: 360px) {
+  .live { font-size: 0; gap: 0; }
   main { padding-left: 12px; padding-right: 12px; }
   .card { padding: 15px; }
   .hero h1 { font-size: 1.6rem; }
@@ -556,6 +563,14 @@ body.ready #splash { animation: splash-out .3s ease forwards; }
   .stepper { gap: 10px; }
   .actions > .btn { flex-basis: 120px; }
   .star-pick button { width: 44px; font-size: 38px; }
+}
+/* Very narrow screens (folded phones, 280 px). */
+@media (max-width: 300px) {
+  .brand { font-size: 1rem; gap: 7px; }
+  .brand img { width: 30px; height: 30px; }
+  .hero h1 { font-size: 1.4rem; }
+  .ticket .band { font-size: .95rem; }
+  .wa-box { flex-wrap: wrap; }
   .report-tiles .rt .v { font-size: 1.7rem; }
 }
 .report-head { background: var(--jaali), var(--hero); border-bottom: 3px solid var(--gold); }
