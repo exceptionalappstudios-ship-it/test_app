@@ -65,6 +65,9 @@ config.whatsappStatus = {
   seen: Object.keys(env).filter((k) => /WHATSAPP|MART2META/i.test(k)).sort(),
 };
 
+// Whether data survives restarts and updates (a volume or a chosen folder).
+config.storageStatus = { persistent: Boolean(env.RAILWAY_VOLUME_MOUNT_PATH || env.DATA_DIR || !onRailway) };
+
 const db = openDatabase(env.DATABASE_FILE || path.join(dataDir, 'appointments.db'));
 
 // The admins are exactly the people on the reference list (src/references.js).

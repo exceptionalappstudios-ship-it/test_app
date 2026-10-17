@@ -441,6 +441,7 @@ export function adminRoutes({ db, notifier, config, now, photos }) {
   router.get('/outbox', (_req, res) => {
     res.json({
       whatsapp: config.whatsappStatus ?? { connected: Boolean(config.whatsapp), missing: [], seen: [] },
+      storage: config.storageStatus ?? { persistent: true },
       messages: db.prepare('SELECT id, kind, recipient, preview, status, error, created_at, sent_at FROM outbound_messages ORDER BY id DESC LIMIT 100').all(),
     });
   });

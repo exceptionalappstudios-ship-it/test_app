@@ -586,15 +586,18 @@ async function feedbackView(ctx) {
 
 async function outboxView(ctx) {
   header('WhatsApp delivery', 'The latest messages sent by the app.');
-  const { messages, whatsapp: w } = await api('/api/admin/outbox');
+  const { messages, whatsapp: w, storage } = await api('/api/admin/outbox');
   if (!ctx.isCurrent()) return;
+  const store = storage?.persistent
+    ? `<div class="notice ok" style="margin-bottom:10px">${icons.checkCircle}<span><b>Data storage is permanent.</b> Bookings and logins are kept through updates.</span></div>`
+    : `<div class="notice bad" style="margin-bottom:10px">${icons.alert}<span><b>Data storage is temporary.</b> Attach a volume at /data in Railway, or everything is erased on each update.</span></div>`;
   // Connection status: which settings the server sees (names only).
   const status = w.connected
     ? `<div class="notice ok" style="margin-bottom:14px">${icons.checkCircle}<span><b>WhatsApp connected</b> (${esc(w.provider)}). Login codes use the template <b>${esc(w.otpTemplate)}</b>.</span></div>`
     : `<div class="notice bad" style="margin-bottom:14px">${icons.alert}<span><b>WhatsApp not connected.</b> Login codes are shown on screen.
         ${w.missing?.length ? `<br>Missing in Railway → Variables: <b>${w.missing.map(esc).join(', ')}</b>` : ''}
         ${w.seen?.length ? `<br>The server sees: ${w.seen.map(esc).join(', ')}` : '<br>The server sees no WhatsApp settings. After adding variables in Railway, press <b>Deploy</b> to apply them.'}</span></div>`;
-  ctx.el.innerHTML = status;
+  ctx.el.innerHTML = store + status;
   const chip = { sent: 'approved', failed: 'rejected', queued: 'pending', sending: 'pending', logged: 'hold' };
   const word = { sent: 'Sent', failed: 'Failed', queued: 'Waiting', sending: 'Sending', logged: 'In app only' };
   ctx.el.insertAdjacentHTML('beforeend', `<div class="card flush">${messages.length ? messages.map((m) => `<div class="person" style="align-items:flex-start"><div class="grow">
