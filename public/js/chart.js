@@ -4,8 +4,8 @@ import { esc, formatShortDate, dayParts } from './common.js';
 // haven't arrived (top) = people confirmed. Plain SVG with a tap/hover tooltip.
 const NS = 'http://www.w3.org/2000/svg';
 const SERIES = [
-  { key: 'checkedIn', label: 'Checked in', color: '#1baf7a' },
-  { key: 'waiting', label: 'Not arrived yet', color: '#2a78d6' },
+  { key: 'checkedIn', label: 'Checked in', color: '#a8203a' },
+  { key: 'waiting', label: 'Not arrived yet', color: '#c98500' },
 ];
 
 const niceMax = (v) => {
@@ -35,8 +35,8 @@ export function renderChart(container, days, focus) {
   for (let i = 0; i <= 4; i++) {
     const v = (max / 4) * i;
     const yy = Math.round(y(v)) + 0.5;
-    html += `<line x1="${m.left}" x2="${width - m.right}" y1="${yy}" y2="${yy}" stroke="#e6ecf5"/>`;
-    if (Number.isInteger(v)) html += `<text x="${m.left - 6}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#7b8aa3">${v}</text>`;
+    html += `<line x1="${m.left}" x2="${width - m.right}" y1="${yy}" y2="${yy}" stroke="#f3e6cc"/>`;
+    if (Number.isInteger(v)) html += `<text x="${m.left - 6}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#9a8073">${v}</text>`;
   }
   const every = Math.ceil(40 / band);
   data.forEach((d, i) => {
@@ -44,8 +44,8 @@ export function renderChart(container, days, focus) {
     const isFocus = d.date === focus;
     if (i % every === 0 || isFocus) {
       const p = dayParts(d.date);
-      html += `<text x="${cx}" y="${height - 18}" text-anchor="middle" font-size="11" font-weight="${isFocus ? 800 : 500}" fill="${isFocus ? '#0f1f3d' : '#7b8aa3'}">${esc(p.day)}</text>`;
-      html += `<text x="${cx}" y="${height - 5}" text-anchor="middle" font-size="10" fill="#7b8aa3">${esc(p.mon)}</text>`;
+      html += `<text x="${cx}" y="${height - 18}" text-anchor="middle" font-size="11" font-weight="${isFocus ? 800 : 500}" fill="${isFocus ? '#4a0d18' : '#9a8073'}">${esc(p.day)}</text>`;
+      html += `<text x="${cx}" y="${height - 5}" text-anchor="middle" font-size="10" fill="#9a8073">${esc(p.mon)}</text>`;
     }
     const x = m.left + band * i + (band - bw) / 2;
     let base = 0;
@@ -57,9 +57,9 @@ export function renderChart(container, days, focus) {
       html += si === visible.length - 1 ? `<path d="${roundedTop(x, top, bw, h, 4)}" fill="${s.color}"/>` : `<rect x="${x}" y="${top}" width="${bw}" height="${h}" fill="${s.color}"/>`;
       base += d[s.key];
     });
-    if (d.people > 0 && band >= 20) html += `<text x="${x + bw / 2}" y="${y(d.people) - 5}" text-anchor="middle" font-size="11" font-weight="700" fill="#4a5b78">${d.people}</text>`;
+    if (d.people > 0 && band >= 20) html += `<text x="${x + bw / 2}" y="${y(d.people) - 5}" text-anchor="middle" font-size="11" font-weight="700" fill="#6b4b4b">${d.people}</text>`;
   });
-  html += `<line x1="${m.left}" x2="${width - m.right}" y1="${m.top + ih + 0.5}" y2="${m.top + ih + 0.5}" stroke="#dfe6f1"/>`;
+  html += `<line x1="${m.left}" x2="${width - m.right}" y1="${m.top + ih + 0.5}" y2="${m.top + ih + 0.5}" stroke="#f1e1c4"/>`;
   data.forEach((d, i) => {
     html += `<rect data-i="${i}" x="${m.left + band * i}" y="${m.top}" width="${band}" height="${ih}" fill="transparent" tabindex="0" aria-label="${esc(formatShortDate(d.date))}: ${d.people} expected, ${d.checkedIn} checked in"/>`;
   });
@@ -72,13 +72,13 @@ export function renderChart(container, days, focus) {
   container.append(svg);
 
   const tip = document.createElement('div');
-  tip.style.cssText = 'position:absolute;pointer-events:none;background:#fff;border:1px solid #dfe6f1;border-radius:12px;padding:8px 12px;box-shadow:0 8px 24px rgba(10,35,87,.15);font-size:.84rem;display:none;min-width:150px;z-index:2';
+  tip.style.cssText = 'position:absolute;pointer-events:none;background:#fff;border:1px solid #f1e1c4;border-radius:12px;padding:8px 12px;box-shadow:0 8px 24px rgba(74,13,24,.15);font-size:.84rem;display:none;min-width:150px;z-index:2';
   container.append(tip);
   const show = (i) => {
     const d = data[i];
     tip.replaceChildren();
     const head = document.createElement('div');
-    head.style.cssText = 'color:#4a5b78;margin-bottom:4px';
+    head.style.cssText = 'color:#6b4b4b;margin-bottom:4px';
     head.textContent = formatShortDate(d.date);
     tip.append(head);
     for (const [label, value, color] of [['Expected', d.people, null], ['Checked in', d.checkedIn, SERIES[0].color], ['Not arrived', d.waiting, SERIES[1].color]]) {
@@ -91,7 +91,7 @@ export function renderChart(container, days, focus) {
       b.style.minWidth = '22px';
       const l = document.createElement('span');
       l.textContent = label;
-      l.style.color = '#7b8aa3';
+      l.style.color = '#9a8073';
       row.append(key, b, l);
       tip.append(row);
     }

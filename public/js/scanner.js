@@ -48,7 +48,7 @@ export function showScanResult(body, { isAdmin = false } = {}) {
         vibrate(60);
         el.innerHTML = `<div class="grab"></div>${verdict('ok', icons.checkCircle, a.express ? 'Valid express pass' : 'Valid pass', a.photo && !a.photo.startsWith('data:image/svg') ? 'Check the face matches the photo' : 'No photo on this pass. Please check an ID card.')}${visitorCard(a)}
           ${a.peopleCount > 1 ? `<div class="label center">How many came?</div><div class="count-picker">${Array.from({ length: a.peopleCount }, (_, i) => i + 1).map((n) => `<button type="button" data-count="${n}" class="${n === count ? 'on' : ''}">${n}</button>`).join('')}</div>` : ''}
-          <div class="actions"><button class="btn block" data-admit style="min-height:60px;font-size:1.15rem">${icons.check} <span data-admit-label>Allow entry (${esc(plural(count, 'person', 'people'))})</span></button></div>
+          <div class="actions"><button class="btn green block" data-admit style="min-height:60px;font-size:1.15rem">${icons.check} <span data-admit-label>Allow entry (${esc(plural(count, 'person', 'people'))})</span></button></div>
           <button class="btn ghost block" data-close>Cancel</button>`;
         $$('[data-count]', el).forEach((b) => b.addEventListener('click', () => {
           count = Number(b.dataset.count);

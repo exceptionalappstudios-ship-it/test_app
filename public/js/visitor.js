@@ -136,7 +136,7 @@ async function bookWhenView(ctx) {
     const byPeriod = Object.fromEntries(day.sessions.map((x) => [x.period, x]));
     ctx.el.innerHTML = `
       <div class="card">
-        <h3>${icons.calendar.replace('<svg', '<svg width="20" height="20" style="vertical-align:-4px;color:var(--blue-700)"')} Pick a day</h3>
+        <h3>${icons.calendar.replace('<svg', '<svg width="20" height="20" style="vertical-align:-4px;color:var(--maroon)"')} Pick a day</h3>
         <div class="date-strip" role="listbox" aria-label="Day">
           ${days.map((d) => { const p = dayParts(d.date); return `<button type="button" class="date-pill ${d.date === draft.date ? 'on' : ''}" data-date="${d.date}" role="option" aria-selected="${d.date === draft.date}"><div class="dow">${esc(p.dow)}</div><div class="day">${esc(p.day)}</div><div class="mon">${esc(p.mon)}</div></button>`; }).join('')}
         </div>
@@ -411,9 +411,10 @@ function bookDoneView(ctx) {
   const a = sessionDone;
   if (!a) { replaceHash('#/visit'); return; }
   header('Request sent 🙏', '');
-  ctx.el.innerHTML = `<div class="card center">
+  ctx.el.innerHTML = `<div class="card center arch festive">
     <div class="big-icon ok">${icons.checkCircle}</div>
     <h2>Thank you, ${esc(firstName(user.name))}!</h2>
+    <div class="ornament"><i></i></div>
     <div class="chips-row">
       <span class="pill">${icons.calendar} ${esc(formatShortDate(a.date))}</span>
       <span class="pill">${PERIOD_ICONS[a.period] ?? icons.clock} ${esc(a.periodLabel)}</span>

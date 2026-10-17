@@ -11,8 +11,10 @@ export function renderLogin(el, { signupAs = 'visitor', onDone, footer = '' }) {
   function phoneStep(error = '') {
     clearInterval(timer);
     el.innerHTML = `
-      <form class="card narrow" novalidate>
-        <h2>${icons.whatsapp.replace('<svg', '<svg width="22" height="22" style="vertical-align:-4px;color:#0b7d3d"')} Your WhatsApp number</h2>
+      <form class="card narrow arch festive center" novalidate>
+        <div class="display-title">Jai Gurudev 🙏</div>
+        <div class="ornament"><i></i></div>
+        <h2 style="font-family:inherit;font-size:1.05rem;font-weight:700;margin-top:8px">${icons.whatsapp.replace('<svg', '<svg width="22" height="22" style="vertical-align:-4px;color:#0b7d3d"')} Your WhatsApp number</h2>
         <p class="sub">We will send you a code.</p>
         <label for="phone" class="sr-only">WhatsApp number</label>
         ${phoneField('phone', phone)}
@@ -37,8 +39,9 @@ export function renderLogin(el, { signupAs = 'visitor', onDone, footer = '' }) {
 
   function codeStep({ testCode, isNew }, error = '') {
     el.innerHTML = `
-      <form class="card narrow" novalidate>
-        <h2>🔑 Type the code</h2>
+      <form class="card narrow arch festive center" novalidate>
+        <div class="display-title">🔑 Type the code</div>
+        <div class="ornament"><i></i></div>
         <p class="sub">Sent on WhatsApp to <strong>${esc(formatPhone(phone))}</strong></p>
         ${testCode ? `<div class="notice info">${icons.info}<span>Test mode · Your code: <strong style="letter-spacing:.15em">${esc(testCode)}</strong></span></div>` : ''}
         <label for="code" class="sr-only">6-digit code</label>
@@ -89,8 +92,9 @@ export function renderLogin(el, { signupAs = 'visitor', onDone, footer = '' }) {
 export function renderProfileSetup(el, user, { onDone, references = null, requireFace = false, intro = 'Only once 🙏' }) {
   let blob = null;
   el.innerHTML = `
-    <form class="card narrow" novalidate>
-      <h2>About you</h2>
+    <form class="card narrow arch festive" novalidate>
+      <div class="display-title center">About you</div>
+      <div class="ornament"><i></i></div>
       <p class="sub">${esc(intro)}</p>
       <label for="name">Your full name</label>
       <input id="name" name="name" autocomplete="name" maxlength="80" required value="${esc(user.name ?? '')}" placeholder="As on your ID card">

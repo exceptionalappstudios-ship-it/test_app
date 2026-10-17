@@ -112,7 +112,7 @@ export function createApp({ db, config: overrides = {}, now = () => new Date() }
   const byToken = db.prepare(`SELECT a.*, u.name AS checked_in_by_name FROM appointments a LEFT JOIN users u ON u.id = a.checked_in_by WHERE a.pass_token = ?`);
   app.get('/p/:token', async (req, res) => {
     res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex',
-      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:" });
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src 'self'" });
     const a = /^[\w-]{16,40}$/.test(req.params.token) ? byToken.get(req.params.token) : null;
     if (!a) return res.status(404).send(renderPassPage({ state: 'missing' }));
     const pass = passState(a, { timeZone: config.timeZone, now: now() });

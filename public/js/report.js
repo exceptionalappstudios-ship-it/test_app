@@ -14,7 +14,8 @@ export function reportHtml(r) {
   return `
     <div class="report">
       <div class="report-head">
-        <div class="small" style="opacity:.85;font-weight:700;letter-spacing:.08em">MEET GURUDEV · DAILY REPORT</div>
+        <div class="report-brand">Guru Sanidhya</div>
+        <div class="small" style="opacity:.85;font-weight:700;letter-spacing:.14em">DAILY REPORT</div>
         <div class="report-date">${esc(formatDate(r.date))}</div>
       </div>
       <div class="report-tiles">
@@ -55,7 +56,8 @@ export function reportHtml(r) {
 // ---- The shareable picture ---------------------------------------------------------
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif';
-const C = { ink: '#0f1f3d', ink2: '#4a5b78', muted: '#7b8aa3', line: '#dfe6f1', bg: '#eef3fa', blue: '#2f7de1', blueDark: '#1446a0', green: '#12a150', amber: '#f0a020', red: '#d22f3c', track: '#e8eef7' };
+const C = { ink: '#2a1215', ink2: '#6b4b4b', muted: '#9a8073', line: '#f1e1c4', bg: '#fff7e6', blue: '#a8203a', blueDark: '#7d1726', green: '#12a150', amber: '#c98500', red: '#d22f3c', track: '#f7ead0', gold: '#f6b416' };
+const DISPLAY = '"Rozha One", Georgia, serif';
 
 // Rounded rectangle path that also works on older phones (no ctx.roundRect).
 // `r` is one radius or [top-left, top-right, bottom-right, bottom-left].
@@ -110,13 +112,22 @@ export function drawReport(r) {
 
   // Header
   const grad = g.createLinearGradient(0, 0, W, 300);
-  grad.addColorStop(0, '#0a2357');
-  grad.addColorStop(0.55, '#1446a0');
-  grad.addColorStop(1, '#2f8de4');
+  grad.addColorStop(0, '#4a0d18');
+  grad.addColorStop(0.55, '#7d1726');
+  grad.addColorStop(1, '#a51f33');
   g.fillStyle = grad;
   g.fillRect(0, 0, W, 300);
-  text(g, 'MEET GURUDEV · DAILY REPORT', PAD, 100, { size: 28, weight: 800, color: 'rgba(255,255,255,.8)' });
-  text(g, formatDate(r.date), PAD, 175, { size: 58, weight: 800, color: '#fff' });
+  // Gold trim along the bottom of the header, like the poster.
+  g.fillStyle = C.gold;
+  g.fillRect(0, 296, W, 4);
+  g.font = `400 46px ${DISPLAY}`;
+  g.fillStyle = '#ffe7a3';
+  g.textAlign = 'left';
+  g.fillText('Guru Sanidhya', PAD, 96);
+  text(g, 'DAILY REPORT', W - PAD, 92, { size: 24, weight: 800, color: 'rgba(255,244,222,.75)', align: 'right' });
+  g.font = `400 54px ${DISPLAY}`;
+  g.fillStyle = '#fff8e7';
+  g.fillText(formatDate(r.date), PAD, 180);
   text(g, `${t.peopleCame} of ${t.peopleExpected} people came`, PAD, 238, { size: 34, weight: 600, color: 'rgba(255,255,255,.9)' });
 
   // Number tiles (2 rows of 2, big and easy to read)
@@ -139,7 +150,10 @@ export function drawReport(r) {
     // Draw the body on a scratch layer first to learn its height.
     const bodyEnd = drawBody(start + 30, true);
     roundRect(g, PAD, top, W - PAD * 2, bodyEnd - top + 34, 28, '#fff');
-    text(g, title, IN, top + 62, { size: 34, weight: 800 });
+    g.font = `400 36px ${DISPLAY}`;
+    g.fillStyle = C.blueDark;
+    g.textAlign = 'left';
+    g.fillText(title, IN, top + 62);
     drawBody(start + 30, false);
     y = bodyEnd + 34 + 26;
   };
@@ -151,7 +165,7 @@ export function drawReport(r) {
       text(g, s.label, IN, yy, { size: 30, weight: 700 });
       roundRect(g, 330, yy - 22, 500, 26, 13, C.track);
       const w = s.expected ? Math.max(26, (500 * s.came) / s.expected) : 0;
-      if (w) roundRect(g, 330, yy - 22, Math.min(500, w), 26, 13, C.green);
+      if (w) roundRect(g, 330, yy - 22, Math.min(500, w), 26, 13, C.blue);
       text(g, `${s.came} / ${s.expected}`, W - IN, yy, { size: 30, weight: 800, align: 'right' });
     });
     return y0 + 20 + (r.sessions.length - 1) * 66 + 30;
@@ -311,13 +325,18 @@ async function shareOrDownload(blob, name, title) {
   return 'downloaded';
 }
 
+// The heading font must be loaded before drawing on the canvas.
+const fontReady = () => (document.fonts?.load ? document.fonts.load(`40px ${DISPLAY}`).catch(() => {}) : Promise.resolve());
+
 export async function shareReport(r) {
+  await fontReady();
   const canvas = drawReport(r);
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
   return shareOrDownload(blob, `meet-gurudev-report-${r.date}.png`, `Daily report ${r.date}`);
 }
 
 export async function saveReportPdf(r) {
+  await fontReady();
   const canvas = drawReport(r);
   const jpegBlob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
   const jpeg = new Uint8Array(await jpegBlob.arrayBuffer());

@@ -213,7 +213,9 @@ export function createRouter({ outlet, routes, fallback, guard, onChange }) {
       enterTimer = setTimeout(() => outlet.classList.remove('enter'), 900);
       try {
         await route.view(ctx, ...match.slice(1));
+        document.body.classList.add('ready'); // fades the opening screen
       } catch (err) {
+        document.body.classList.add('ready');
         if (ctx.isCurrent()) {
           outlet.innerHTML = `<div class="card"><div class="notice bad">${icons.alert}<span>${esc(err.message)}</span></div><div class="actions"><button class="btn light" data-retry>Try again</button></div></div>`;
           outlet.querySelector('[data-retry]').addEventListener('click', () => location.reload());

@@ -185,10 +185,10 @@ async function homeView(ctx) {
     dayNav(dashDate, pick);
     const s = d.summary;
     const pct = s.people ? Math.round((s.checkedInPeople / s.people) * 100) : 0;
-    const ring = `<svg class="ring" viewBox="0 0 36 36" role="img" aria-label="${pct}% checked in"><circle cx="18" cy="18" r="15.5" fill="none" stroke="#e8f1fd" stroke-width="4"/>
+    const ring = `<svg class="ring" viewBox="0 0 36 36" role="img" aria-label="${pct}% checked in"><circle cx="18" cy="18" r="15.5" fill="none" stroke="#f7ead0" stroke-width="4"/>
       <circle cx="18" cy="18" r="15.5" fill="none" stroke="url(#g)" stroke-width="4" stroke-linecap="round" stroke-dasharray="${(pct / 100) * 97.4} 97.4" transform="rotate(-90 18 18)"/>
-      <defs><linearGradient id="g"><stop offset="0" stop-color="#2f7de1"/><stop offset="1" stop-color="#1fbf63"/></linearGradient></defs>
-      <text x="18" y="21" text-anchor="middle" font-size="7.5" font-weight="800" fill="#0f1f3d">${pct}%</text></svg>`;
+      <defs><linearGradient id="g"><stop offset="0" stop-color="#8e1b2b"/><stop offset=".6" stop-color="#c8105e"/><stop offset="1" stop-color="#f6b416"/></linearGradient></defs>
+      <text x="18" y="21" text-anchor="middle" font-size="7.5" font-weight="800" fill="#4a0d18">${pct}%</text></svg>`;
     ctx.el.innerHTML = `
       <div class="kpis">
         <div class="kpi main">${ring}<div><div class="l">People checked in</div><div class="v">${s.checkedInPeople}<span class="muted" style="font-size:1.1rem;font-weight:700"> / ${s.people}</span></div></div></div>
@@ -207,7 +207,7 @@ async function homeView(ctx) {
           <div class="row" style="justify-content:space-between"><h2>Sessions</h2><a class="small" href="#/sessions">Manage slots</a></div>
           ${d.sessions.length ? d.sessions.map((x) => {
             const p = x.people ? Math.round((x.checkedInPeople / x.people) * 100) : 0;
-            return `<div class="session-row"><div class="row" style="gap:8px"><span style="color:var(--blue-700);display:grid">${PERIOD_ICONS[x.period].replace('<svg', '<svg width="20" height="20"')}</span><strong>${esc(x.label)}</strong></div>
+            return `<div class="session-row"><div class="row" style="gap:8px"><span style="color:var(--maroon);display:grid">${PERIOD_ICONS[x.period].replace('<svg', '<svg width="20" height="20"')}</span><strong>${esc(x.label)}</strong></div>
               <div class="meter" title="${x.checkedInPeople} of ${x.people} people"><span style="width:${p}%"></span></div>
               <span class="n">${x.checkedInPeople} / ${x.people}</span></div>`;
           }).join('') + '<div class="small muted" style="margin-top:6px">People checked in / people confirmed</div>' : '<div class="empty">No sessions open on this day. <a href="#/sessions">Bookings &amp; slots</a></div>'}
@@ -287,7 +287,7 @@ async function visitorsView(ctx) {
       <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
         <div><div class="l small muted">Confirmed</div><div style="font-size:1.6rem;font-weight:800">${s.approved}</div><div class="small muted">${plural(s.people, 'person', 'people')}</div></div>
         <div><div class="l small muted">Checked in</div><div style="font-size:1.6rem;font-weight:800;color:var(--green-dark)">${s.checkedIn}</div><div class="small muted">${plural(s.checkedInPeople, 'person', 'people')}</div></div>
-        <div><div class="l small muted">Not arrived</div><div style="font-size:1.6rem;font-weight:800;color:var(--blue-700)">${s.remaining}</div><div class="small muted">${plural(s.remainingPeople, 'person', 'people')}</div></div>
+        <div><div class="l small muted">Not arrived</div><div style="font-size:1.6rem;font-weight:800;color:var(--maroon)">${s.remaining}</div><div class="small muted">${plural(s.remainingPeople, 'person', 'people')}</div></div>
       </div>`;
     const list = $('#list', ctx.el);
     list.innerHTML = appointments.length ? appointments.map((a) => `
@@ -683,8 +683,9 @@ async function expressView(ctx) {
 function loginView(ctx, error = '') {
   header('Admin', 'Log in with your phone number and password.');
   ctx.el.innerHTML = `
-    <form class="card narrow" novalidate>
-      <h2>Admin login</h2>
+    <form class="card narrow arch festive" novalidate>
+      <div class="display-title center">Admin login</div>
+      <div class="ornament"><i></i></div>
       <label for="phone">Phone number</label>
       ${phoneField('phone')}
       <label for="password">Password</label>
