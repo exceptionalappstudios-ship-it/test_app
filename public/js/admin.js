@@ -63,14 +63,20 @@ function onChanged(ctx, fn) {
   ctx.onCleanup(() => { window.removeEventListener('admin:changed', handler); clearInterval(timer); });
 }
 
-// Prev / date / next control shown in the header.
+// One date control in the header: ‹ [Today · Sat 17 Oct] ›. Tapping the
+// middle opens the phone's date picker; "Back to today" shows on other days.
 function dayNav(date, onPick) {
+  const word = date === today ? 'Today' : date === addDays(today, 1) ? 'Tomorrow' : date === addDays(today, -1) ? 'Yesterday' : '';
   $('#heroExtra').innerHTML = `<div class="day-nav">
     <button class="icon-btn" data-prev aria-label="Previous day">${icons.back}</button>
-    <input type="date" value="${date}" aria-label="Choose a day" style="max-width:180px">
+    <label class="day-pick">
+      <span class="d1">${esc(word || formatShortDate(date).split(',')[0])}</span>
+      <span class="d2">${esc(word ? formatShortDate(date) : formatShortDate(date).split(', ').slice(1).join(', '))}</span>
+      <input type="date" value="${date}" aria-label="Choose a day">
+    </label>
     <button class="icon-btn" data-next aria-label="Next day">${icons.next}</button>
-    ${date !== today ? '<button class="btn small light" data-today style="margin-left:auto">Today</button>' : '<span class="lbl" style="margin-left:auto">Today</span>'}
-  </div>`;
+  </div>
+  ${date !== today ? '<button class="today-link" data-today>↺ Back to today</button>' : ''}`;
   $('[data-prev]').onclick = () => onPick(addDays(date, -1));
   $('[data-next]').onclick = () => onPick(addDays(date, 1));
   $('#heroExtra input').onchange = (e) => e.target.value && onPick(e.target.value);
@@ -181,7 +187,7 @@ async function homeView(ctx) {
     const d = await api(`/api/admin/dashboard?date=${dashDate}`);
     if (!ctx.isCurrent()) return;
     today = d.today;
-    header(dashDate === today ? 'Today' : formatDate(dashDate), dashDate === today ? formatDate(today) : '');
+    header('Dashboard');
     dayNav(dashDate, pick);
     const s = d.summary;
     const pct = s.people ? Math.round((s.checkedInPeople / s.people) * 100) : 0;
@@ -267,7 +273,7 @@ async function visitorsView(ctx) {
   visitDate ??= today;
   let q = '';
   const pick = (d) => { visitDate = d; visitorsView(ctx); };
-  header('Visitors', formatDate(visitDate));
+  header('Visitors');
   dayNav(visitDate, pick);
   ctx.el.innerHTML = `
     <div class="card" id="stats"><div class="spinner"></div></div>
