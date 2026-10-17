@@ -115,6 +115,7 @@ main { max-width: 960px; margin: -44px auto 0; padding: 0 16px 24px; position: r
 
 .notice { padding: 12px 14px; border-radius: 14px; font-size: .95rem; display: flex; gap: 10px; align-items: flex-start; }
 .notice svg { width: 22px; height: 22px; flex: 0 0 auto; }
+.notice > span { min-width: 0; overflow-wrap: anywhere; }
 .notice.info { background: var(--gold-50); color: #6b3a00; }
 .notice.ok { background: var(--green-50); color: var(--green-dark); }
 .notice.warn { background: var(--amber-50); color: var(--amber); }
